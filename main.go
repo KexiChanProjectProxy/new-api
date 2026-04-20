@@ -249,6 +249,21 @@ func InitResources() error {
 		}
 	}
 
+	common.ParseFlags()
+
+	configPath := common.GetJsonConfigPath()
+	if configPath != "" {
+		jc, err := common.LoadJsonConfigFile(configPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				common.SysLog("failed to load JSON config: " + err.Error())
+			}
+		} else {
+			jc.ApplyToEnv()
+			common.SysLog("loaded JSON config from: " + configPath)
+		}
+	}
+
 	// 加载环境变量
 	common.InitEnv()
 

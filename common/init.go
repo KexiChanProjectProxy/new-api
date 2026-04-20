@@ -19,6 +19,7 @@ var (
 	PrintVersion = flag.Bool("version", false, "print version and exit")
 	PrintHelp    = flag.Bool("help", false, "print help and exit")
 	LogDir       = flag.String("log-dir", "./logs", "specify the log directory")
+	ConfigFile   = flag.String("config", "", "path to JSON configuration file")
 )
 
 func printHelp() {
@@ -28,8 +29,15 @@ func printHelp() {
 	fmt.Println("Usage: newapi [--port <port>] [--log-dir <log directory>] [--version] [--help]")
 }
 
-func InitEnv() {
+// ParseFlags parses CLI flags early. This allows --config flag to be
+// available before the full InitEnv() runs.
+func ParseFlags() {
 	flag.Parse()
+}
+
+func InitEnv() {
+	// flag.Parse() is called early via ParseFlags() before JSON config loading
+	// Calling it again is safe (no-op) but we skip it for clarity
 
 	envVersion := os.Getenv("VERSION")
 	if envVersion != "" {
@@ -107,6 +115,16 @@ func InitEnv() {
 	// Initialize string variables with GetEnvOrDefaultString
 	GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
 	CohereSafetySetting = GetEnvOrDefaultString("COHERE_SAFETY_SETTING", "NONE")
+
+	// Parse relay subpaths
+	relaySubpathsStr := GetEnvOrDefaultString("RELAY_SUBPATHS", "")
+	if relaySubpathsStr != "" {
+		subpaths, err := ParseRelaySubpaths(relaySubpathsStr)
+		if err != nil {
+			log.Fatal("invalid RELAY_SUBPATHS: " + err.Error())
+		}
+		RelaySubpaths = subpaths
+	}
 
 	// Initialize rate limit variables
 	GlobalApiRateLimitEnable = GetEnvOrDefaultBool("GLOBAL_API_RATE_LIMIT_ENABLE", true)
