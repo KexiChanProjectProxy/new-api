@@ -44,6 +44,22 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+
+	relayMCPRouter := router.Group("/mcp")
+	relayMCPRouter.Use(middleware.RouteTag("relay"))
+	relayMCPRouter.Use(middleware.SystemPerformanceCheck())
+	relayMCPRouter.Use(middleware.TokenAuth())
+	relayMCPRouter.Use(middleware.ModelRequestRateLimit())
+	relayMCPRouter.Use(middleware.Distribute())
+	{
+		relayMCPRouter.POST("/v1", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatMCP)
+		})
+		relayMCPRouter.GET("/v1", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatMCP)
+		})
+	}
+
 	registerRelayV1Routes(router.Group("/v1"))
 
 	v1GeminiRouter := router.Group("/v1")

@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/channel/mcp"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -62,6 +63,80 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 		err = relay.GeminiHelper(c, info)
 	}
 	return err
+}
+
+func mcpRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
+	adaptor := relay.GetAdaptor(constant.APITypeMCP)
+	if adaptor == nil {
+		return types.NewError(fmt.Errorf("invalid api type for MCP"), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+	}
+
+	adaptor.Init(info)
+
+	bodyStorage, bodyErr := common.GetBodyStorage(c)
+	if bodyErr != nil {
+		return types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	bodyBytes, err := bodyStorage.Bytes()
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	mcpMethod := mcp.ExtractMCPMethod(bodyBytes)
+	info.InitChannelMeta(c)
+	info.ChannelMeta.MCPMethod = mcpMethod
+
+	isBillable := mcp.IsBillableMethod(mcpMethod)
+
+	if isBillable {
+		priceData, err := helper.ModelPriceHelperPerCall(c, info)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry())
+		}
+
+		if !priceData.FreeModel {
+			if apiErr := service.PreConsumeBilling(c, priceData.QuotaToPreConsume, info); apiErr != nil {
+				return apiErr
+			}
+		}
+		info.PriceData = priceData
+	}
+
+	resp, err := adaptor.DoRequest(c, info, common.ReaderOnly(bodyStorage))
+	if err != nil {
+		if isBillable && info.Billing != nil {
+			info.Billing.Refund(c)
+			info.Billing = nil
+		}
+		return types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+
+	httpResp, ok := resp.(*http.Response)
+	if !ok {
+		if isBillable && info.Billing != nil {
+			info.Billing.Refund(c)
+			info.Billing = nil
+		}
+		return types.NewError(fmt.Errorf("unexpected response type: %T", resp), types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+
+	_, apiErr := adaptor.DoResponse(c, httpResp, info)
+	if apiErr != nil {
+		if isBillable && info.Billing != nil {
+			info.Billing.Refund(c)
+			info.Billing = nil
+		}
+		return apiErr
+	}
+
+	if isBillable {
+		if settleErr := service.SettleBilling(c, info, info.PriceData.Quota); settleErr != nil {
+			common.SysError("settle mcp billing error: " + settleErr.Error())
+		}
+	}
+
+	return nil
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
@@ -149,33 +224,34 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	relayInfo.SetEstimatePromptTokens(tokens)
 
-	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
-	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
-		return
-	}
-
-	// common.SetContextKey(c, constant.ContextKeyTokenCountMeta, meta)
-
-	if priceData.FreeModel {
-		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
-	} else {
-		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
-		if newAPIError != nil {
+	// MCP handles its own billing in mcpRelayHandler — skip standard billing path
+	if relayFormat != types.RelayFormatMCP {
+		priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
+		if err != nil {
+			newAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
 			return
 		}
-	}
 
-	defer func() {
-		// Only return quota if downstream failed and quota was actually pre-consumed
-		if newAPIError != nil {
-			newAPIError = service.NormalizeViolationFeeError(newAPIError)
-			if relayInfo.Billing != nil {
-				relayInfo.Billing.Refund(c)
+		if priceData.FreeModel {
+			logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
+		} else {
+			newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
+			if newAPIError != nil {
+				return
 			}
-			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
 		}
-	}()
+
+		defer func() {
+			// Only return quota if downstream failed and quota was actually pre-consumed
+			if newAPIError != nil {
+				newAPIError = service.NormalizeViolationFeeError(newAPIError)
+				if relayInfo.Billing != nil {
+					relayInfo.Billing.Refund(c)
+				}
+				service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
+			}
+		}()
+	}
 
 	retryParam := &service.RetryParam{
 		Ctx:        c,
@@ -215,6 +291,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relay.ClaudeHelper(c, relayInfo)
 		case types.RelayFormatGemini:
 			newAPIError = geminiRelayHandler(c, relayInfo)
+		case types.RelayFormatMCP:
+			newAPIError = mcpRelayHandler(c, relayInfo)
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}

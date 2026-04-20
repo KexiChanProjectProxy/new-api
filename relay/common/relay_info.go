@@ -76,6 +76,7 @@ type ChannelMeta struct {
 	UpstreamModelName    string
 	IsModelMapped        bool
 	SupportStreamOptions bool // 是否支持流式选项
+	MCPMethod            string
 }
 
 type TokenCountMeta struct {
