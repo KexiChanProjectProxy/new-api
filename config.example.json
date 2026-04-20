@@ -1,6 +1,7 @@
 {
   "bootstrap": {
     "session_secret": "replace_with_your_own_random_string_at_least_32_chars",
+    "crypto_secret": "",
     "debug": false,
     "memory_cache_enabled": true,
     "sqlite_path": "one-api.db?_busy_timeout=30000"
@@ -110,5 +111,10 @@
   "oauth": {
     "linux_do_token_endpoint": "https://connect.linux.do/oauth2/token",
     "linux_do_user_endpoint": "https://connect.linux.do/api/user"
+  },
+  "analytics": {
+    "umami_website_id": "",
+    "umami_script_url": "",
+    "google_analytics_id": ""
   }
 }
