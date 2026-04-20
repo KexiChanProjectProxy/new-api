@@ -229,12 +229,9 @@ func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.Cha
 }
 
 func getUpstreamModelUpdateMinCheckIntervalSeconds() int64 {
-	interval := int64(common.GetEnvOrDefault(
-		"CHANNEL_UPSTREAM_MODEL_UPDATE_MIN_CHECK_INTERVAL_SECONDS",
-		channelUpstreamModelUpdateMinCheckIntervalSeconds,
-	))
+	interval := int64(common.GetStartupConfig().Schedulers.ChannelUpstreamModelUpdateMinCheckIntervalSeconds)
 	if interval < 0 {
-		return channelUpstreamModelUpdateMinCheckIntervalSeconds
+		return int64(channelUpstreamModelUpdateMinCheckIntervalSeconds)
 	}
 	return interval
 }
@@ -634,15 +631,12 @@ func StartChannelUpstreamModelUpdateTask() {
 		if !common.IsMasterNode {
 			return
 		}
-		if !common.GetEnvOrDefaultBool("CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", true) {
-			common.SysLog("upstream model update task disabled by CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED")
+		if !common.GetStartupConfig().Schedulers.ChannelUpstreamModelUpdateTaskEnabled {
+			common.SysLog("upstream model update task disabled by config")
 			return
 		}
 
-		intervalMinutes := common.GetEnvOrDefault(
-			"CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_INTERVAL_MINUTES",
-			channelUpstreamModelUpdateTaskDefaultIntervalMinutes,
-		)
+		intervalMinutes := common.GetStartupConfig().Schedulers.ChannelUpstreamModelUpdateTaskIntervalMinutes
 		if intervalMinutes < 1 {
 			intervalMinutes = channelUpstreamModelUpdateTaskDefaultIntervalMinutes
 		}

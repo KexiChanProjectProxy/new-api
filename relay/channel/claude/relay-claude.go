@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -377,6 +378,9 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 							})
 						}
 					default:
+						if file := mediaMessage.GetFile(); file != nil && strings.HasSuffix(file.FileName, ".bin") {
+							continue
+						}
 						source := mediaMessage.ToFileSource()
 						if source == nil {
 							continue
@@ -389,6 +393,22 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 							Source: &dto.ClaudeMessageSource{
 								Type: "base64",
 							},
+						}
+						if file := mediaMessage.GetFile(); file != nil && strings.HasSuffix(file.FileName, ".pdf") {
+							claudeMediaMessage.Type = "document"
+							claudeMediaMessage.Source.MediaType = "application/pdf"
+							claudeMediaMessage.Source.Data = base64Data
+							claudeMediaMessages = append(claudeMediaMessages, claudeMediaMessage)
+							continue
+						}
+						if mimeType == "text/plain" {
+							if decodedData, err := base64.StdEncoding.DecodeString(base64Data); err == nil {
+								claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
+									Type: "text",
+									Text: common.GetPointer[string](string(decodedData)),
+								})
+							}
+							continue
 						}
 						if strings.HasPrefix(mimeType, "application/pdf") {
 							claudeMediaMessage.Type = "document"

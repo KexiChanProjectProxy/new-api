@@ -1,17 +1,23 @@
 package ratio_setting
 
-import "sync/atomic"
+import (
+	"strconv"
 
-var exposeRatioEnabled atomic.Bool
-
-func init() {
-	exposeRatioEnabled.Store(false)
-}
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+)
 
 func SetExposeRatioEnabled(enabled bool) {
-	exposeRatioEnabled.Store(enabled)
+	cfg := operation_setting.GetOperationSystemSetting()
+	if cfg != nil {
+		cfg.ExposeRatioEnabled = enabled
+	}
+	operation_setting.UpdateOperationSystemSetting("expose_ratio_enabled", strconv.FormatBool(enabled))
 }
 
 func IsExposeRatioEnabled() bool {
-	return exposeRatioEnabled.Load()
+	cfg := operation_setting.GetOperationSystemSetting()
+	if cfg != nil {
+		return cfg.ExposeRatioEnabled
+	}
+	return false
 }

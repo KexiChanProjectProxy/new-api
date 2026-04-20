@@ -377,6 +377,12 @@ func loadFromBase64(base64String string, providedMimeType string) (*types.Cached
 			if mimeType == "" {
 				cachedData.MimeType = "image/" + format
 			}
+		} else if mimeType == "" {
+			if len(decodedData) >= 100 && decodedData[0] == 0x25 && decodedData[1] == 0x50 && decodedData[2] == 0x44 && decodedData[3] == 0x46 {
+				cachedData.MimeType = "application/pdf"
+			} else if isTextFile(decodedData) {
+				cachedData.MimeType = "text/plain"
+			}
 		}
 	}
 
@@ -448,6 +454,21 @@ func GetMimeType(c *gin.Context, source types.FileSource) (string, error) {
 }
 
 // DetectFileType 检测文件类型
+func isTextFile(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	for i, b := range data {
+		if b == 0 {
+			return false
+		}
+		if i > 1024 {
+			break
+		}
+	}
+	return true
+}
+
 func DetectFileType(mimeType string) types.FileType {
 	if strings.HasPrefix(mimeType, "image/") {
 		return types.FileTypeImage

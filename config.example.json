@@ -1,0 +1,114 @@
+{
+  "bootstrap": {
+    "session_secret": "replace_with_your_own_random_string_at_least_32_chars",
+    "debug": false,
+    "memory_cache_enabled": true,
+    "sqlite_path": "one-api.db?_busy_timeout=30000"
+  },
+  "server": {
+    "port": 3000,
+    "gin_mode": "release",
+    "frontend_base_url": ""
+  },
+  "database": {
+    "sql_dsn": "",
+    "log_sql_dsn": "",
+    "sql_max_idle_conns": 100,
+    "sql_max_open_conns": 1000,
+    "sql_max_lifetime_seconds": 60
+  },
+  "redis": {
+    "redis_conn_string": "",
+    "redis_pool_size": 10
+  },
+  "logging": {
+    "log_dir": "./logs",
+    "error_log_enabled": false
+  },
+  "observability": {
+    "pyroscope": {
+      "url": "",
+      "app_name": "new-api",
+      "basic_auth_user": "",
+      "basic_auth_password": "",
+      "mutex_rate": 5,
+      "block_rate": 5,
+      "hostname": "new-api"
+    },
+    "pprof": {
+      "enabled": false
+    }
+  },
+  "relay": {
+    "tls_insecure_skip_verify": false,
+    "relay_timeout": 0,
+    "relay_max_idle_conns": 500,
+    "relay_max_idle_conns_per_host": 100,
+    "streaming_timeout": 300,
+    "max_file_download_mb": 64,
+    "stream_scanner_max_buffer_mb": 128,
+    "max_request_body_mb": 128,
+    "azure_default_api_version": "2025-04-01-preview",
+    "gemini_safety_setting": "BLOCK_NONE",
+    "cohere_safety_setting": "NONE",
+    "relay_subpaths": [],
+    "trusted_redirect_domains": [],
+    "force_stream_option": false,
+    "count_token": false,
+    "get_media_token": false,
+    "get_media_token_not_stream": false,
+    "dify_debug": false
+  },
+  "limits": {
+    "rate_limit": {
+      "api": {
+        "enable": false,
+        "num": 180,
+        "duration": 180
+      },
+      "web": {
+        "enable": false,
+        "num": 60,
+        "duration": 180
+      },
+      "critical": {
+        "enable": false,
+        "num": 20,
+        "duration": 1200
+      },
+      "search": {
+        "enable": false,
+        "num": 10,
+        "duration": 60
+      }
+    },
+    "task": {
+      "query_limit": 1000,
+      "timeout_minutes": 1440,
+      "notify_limit_count": 2,
+      "notification_limit_duration_minute": 10,
+      "price_patches": []
+    }
+  },
+  "schedulers": {
+    "sync_frequency": 60,
+    "polling_interval": 60,
+    "batch_update_enabled": true,
+    "batch_update_interval": 5,
+    "channel_update_frequency": 0,
+    "update_task": false,
+    "channel_upstream_model_update_task_enabled": false,
+    "channel_upstream_model_update_task_interval_minutes": 30,
+    "channel_upstream_model_update_min_check_interval_seconds": 300
+  },
+  "sync": {
+    "upstream_base": "https://basellm.github.io/llm-metadata",
+    "http_timeout_seconds": 10,
+    "http_retry": 3,
+    "http_max_mb": 10
+  },
+  "oauth": {
+    "linux_do_token_endpoint": "https://connect.linux.do/oauth2/token",
+    "linux_do_user_endpoint": "https://connect.linux.do/api/user"
+  }
+}

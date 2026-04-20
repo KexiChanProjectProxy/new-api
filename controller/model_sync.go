@@ -37,7 +37,7 @@ func normalizeLocale(locale string) (string, bool) {
 }
 
 func getUpstreamBase() string {
-	return common.GetEnvOrDefaultString("SYNC_UPSTREAM_BASE", "https://basellm.github.io/llm-metadata")
+	return common.GetStartupConfig().Sync.UpstreamBase
 }
 
 func getUpstreamURLs(locale string) (modelsURL, vendorsURL string) {
@@ -90,7 +90,7 @@ type syncRequest struct {
 }
 
 func newHTTPClient() *http.Client {
-	timeoutSec := common.GetEnvOrDefault("SYNC_HTTP_TIMEOUT_SECONDS", 10)
+	timeoutSec := common.GetStartupConfig().Sync.HTTPTimeout
 	dialer := &net.Dialer{Timeout: time.Duration(timeoutSec) * time.Second}
 	transport := &http.Transport{
 		MaxIdleConns:          100,
@@ -132,12 +132,12 @@ func getHTTPClient() *http.Client {
 
 func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T]) error {
 	var lastErr error
-	attempts := common.GetEnvOrDefault("SYNC_HTTP_RETRY", 3)
+	attempts := common.GetStartupConfig().Sync.HTTPRetry
 	if attempts < 1 {
 		attempts = 1
 	}
 	baseDelay := 200 * time.Millisecond
-	maxMB := common.GetEnvOrDefault("SYNC_HTTP_MAX_MB", 10)
+	maxMB := common.GetStartupConfig().Sync.HTTPMaxMB
 	maxBytes := int64(maxMB) << 20
 	for attempt := 0; attempt < attempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -300,7 +300,7 @@ func SyncUpstreamModels(c *gin.Context) {
 	}
 
 	// 2) 拉取上游 vendors 与 models
-	timeoutSec := common.GetEnvOrDefault("SYNC_HTTP_TIMEOUT_SECONDS", 15)
+	timeoutSec := common.GetStartupConfig().Sync.HTTPTimeout
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
@@ -498,7 +498,7 @@ func chooseStatus(primary, fallback int) int {
 // SyncUpstreamPreview 预览上游与本地的差异（仅用于弹窗选择）
 func SyncUpstreamPreview(c *gin.Context) {
 	// 1) 拉取上游数据
-	timeoutSec := common.GetEnvOrDefault("SYNC_HTTP_TIMEOUT_SECONDS", 15)
+	timeoutSec := common.GetStartupConfig().Sync.HTTPTimeout
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 

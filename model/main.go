@@ -3,7 +3,6 @@ package model
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -38,7 +37,12 @@ func initCol() {
 		commonTrueVal = "1"
 		commonFalseVal = "0"
 	}
-	if os.Getenv("LOG_SQL_DSN") != "" {
+	// Use startup config for log DSN
+	logDSN := ""
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil {
+		logDSN = startupCfg.Database.LogDSN
+	}
+	if logDSN != "" {
 		switch common.LogSqlType {
 		case common.DatabaseTypePostgreSQL:
 			logGroupCol = `"group"`
@@ -115,11 +119,10 @@ func CheckSetup() {
 	}
 }
 
-func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
+func chooseDB(dsn string, isLog bool) (*gorm.DB, error) {
 	defer func() {
 		initCol()
 	}()
-	dsn := os.Getenv(envName)
 	if dsn != "" {
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 			// Use PostgreSQL
@@ -175,7 +178,11 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 }
 
 func InitDB() (err error) {
-	db, err := chooseDB("SQL_DSN", false)
+	var dbDSN string
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil {
+		dbDSN = startupCfg.Database.SQLDSN
+	}
+	db, err := chooseDB(dbDSN, false)
 	if err == nil {
 		if common.DebugEnabled {
 			db = db.Debug()
@@ -191,9 +198,15 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
-		sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
-		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
-		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
+		if startupCfg := common.GetStartupConfig(); startupCfg != nil {
+			sqlDB.SetMaxIdleConns(startupCfg.Database.MaxIdleConns)
+			sqlDB.SetMaxOpenConns(startupCfg.Database.MaxOpenConns)
+			sqlDB.SetConnMaxLifetime(time.Second * time.Duration(startupCfg.Database.MaxLifetimeSeconds))
+		} else {
+			sqlDB.SetMaxIdleConns(100)
+			sqlDB.SetMaxOpenConns(1000)
+			sqlDB.SetConnMaxLifetime(time.Second * 60)
+		}
 
 		if !common.IsMasterNode {
 			return nil
@@ -211,11 +224,15 @@ func InitDB() (err error) {
 }
 
 func InitLogDB() (err error) {
-	if os.Getenv("LOG_SQL_DSN") == "" {
+	var logDSN string
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil {
+		logDSN = startupCfg.Database.LogDSN
+	}
+	if logDSN == "" {
 		LOG_DB = DB
 		return
 	}
-	db, err := chooseDB("LOG_SQL_DSN", true)
+	db, err := chooseDB(logDSN, true)
 	if err == nil {
 		if common.DebugEnabled {
 			db = db.Debug()
@@ -231,9 +248,15 @@ func InitLogDB() (err error) {
 		if err != nil {
 			return err
 		}
-		sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
-		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
-		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
+		if startupCfg := common.GetStartupConfig(); startupCfg != nil {
+			sqlDB.SetMaxIdleConns(startupCfg.Database.MaxIdleConns)
+			sqlDB.SetMaxOpenConns(startupCfg.Database.MaxOpenConns)
+			sqlDB.SetConnMaxLifetime(time.Second * time.Duration(startupCfg.Database.MaxLifetimeSeconds))
+		} else {
+			sqlDB.SetMaxIdleConns(100)
+			sqlDB.SetMaxOpenConns(1000)
+			sqlDB.SetConnMaxLifetime(time.Second * 60)
+		}
 
 		if !common.IsMasterNode {
 			return nil

@@ -4,7 +4,6 @@ import (
 	"embed"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -18,7 +17,7 @@ func SetRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
 	SetVideoRouter(router)
-	frontendBaseUrl := os.Getenv("FRONTEND_BASE_URL")
+	frontendBaseUrl := common.GetStartupConfig().Server.FrontendBaseURL
 	if common.IsMasterNode && frontendBaseUrl != "" {
 		frontendBaseUrl = ""
 		common.SysLog("FRONTEND_BASE_URL is ignored on master node")

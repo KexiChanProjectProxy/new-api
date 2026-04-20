@@ -113,8 +113,9 @@
 git clone https://github.com/QuantumNous/new-api.git
 cd new-api
 
-# Edit docker-compose.yml configuration
-nano docker-compose.yml
+# Copy and edit the sample configuration
+cp config.example.json config.json
+nano config.json
 
 # Start the service
 docker-compose up -d
@@ -127,20 +128,23 @@ docker-compose up -d
 # Pull the latest image
 docker pull calciumion/new-api:latest
 
+# Create your config file
+cp config.example.json config.json
+# Edit config.json with your settings
+
 # Using SQLite (default)
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
+  -v $(pwd)/config.json:/config.json \
   -v ./data:/data \
-  calciumion/new-api:latest
+  calciumion/new-api:latest --config /config.json
 
 # Using MySQL
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
-  -e TZ=Asia/Shanghai \
+  -v $(pwd)/config.json:/config.json \
   -v ./data:/data \
-  calciumion/new-api:latest
+  calciumion/new-api:latest --config /config.json
 ```
 
 > **💡 Tip:** `-v ./data:/data` will save data in the `data` folder of the current directory, you can also change it to an absolute path like `-v /your/custom/path:/data`
@@ -168,7 +172,7 @@ docker run --name new-api -d --restart always \
 | Category | Link |
 |------|------|
 | 🚀 Deployment Guide | [Installation Documentation](https://docs.newapi.pro/en/docs/installation) |
-| ⚙️ Environment Configuration | [Environment Variables](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables) |
+| ⚙️ Configuration | [JSON Config Schema](./config.example.json) |
 | 📡 API Documentation | [API Documentation](https://docs.newapi.pro/en/docs/api) |
 | ❓ FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
 | 💬 Community Interaction | [Communication Channels](https://docs.newapi.pro/en/docs/support/community-interaction) |
@@ -301,31 +305,30 @@ docker run --name new-api -d --restart always \
 | **Remote database** | MySQL ≥ 5.7.8 or PostgreSQL ≥ 9.6 |
 | **Container engine** | Docker / Docker Compose |
 
-### ⚙️ Environment Variable Configuration
+### ⚙️ Configuration File (JSON)
+
+> [!IMPORTANT]
+> Configuration is done exclusively via JSON configuration file using the `--config` flag.
 
 <details>
-<summary>Common environment variable configuration</summary>
+<summary>Quick configuration reference</summary>
 
-| Variable Name | Description | Default Value |
-|--------|------|--------|
-| `SESSION_SECRET` | Session secret (required for multi-machine deployment) | - |
-| `CRYPTO_SECRET` | Encryption secret (required for Redis) | - |
-| `SQL_DSN` | Database connection string | - |
-| `REDIS_CONN_STRING` | Redis connection string | - |
-| `STREAMING_TIMEOUT` | Streaming timeout (seconds) | `300` |
-| `STREAM_SCANNER_MAX_BUFFER_MB` | Max per-line buffer (MB) for the stream scanner; increase when upstream sends huge image/base64 payloads | `64` |
-| `MAX_REQUEST_BODY_MB` | Max request body size (MB, counted **after decompression**; prevents huge requests/zip bombs from exhausting memory). Exceeding it returns `413` | `32` |
-| `AZURE_DEFAULT_API_VERSION` | Azure API version | `2025-04-01-preview` |
-| `ERROR_LOG_ENABLED` | Error log switch | `false` |
-| `PYROSCOPE_URL` | Pyroscope server address | - |
-| `PYROSCOPE_APP_NAME` | Pyroscope application name | `new-api` |
-| `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope basic auth user | - |
-| `PYROSCOPE_BASIC_AUTH_PASSWORD` | Pyroscope basic auth password | - |
-| `PYROSCOPE_MUTEX_RATE` | Pyroscope mutex sampling rate | `5` |
-| `PYROSCOPE_BLOCK_RATE` | Pyroscope block sampling rate | `5` |
-| `HOSTNAME` | Hostname tag for Pyroscope | `new-api` |
+| Config Path | Description | Default |
+|------------|-------------|---------|
+| `bootstrap.session_secret` | Session secret (required) | - |
+| `database.sql_dsn` | Database connection string | - |
+| `database.sql_max_idle_conns` | Max idle DB connections | `100` |
+| `database.sql_max_open_conns` | Max open DB connections | `1000` |
+| `database.sql_max_lifetime_seconds` | DB connection max lifetime (seconds) | `60` |
+| `redis.redis_conn_string` | Redis connection string | - |
+| `logging.log_dir` | Log directory | `./logs` |
+| `relay.streaming_timeout` | Streaming timeout (seconds) | `300` |
+| `relay.max_file_download_mb` | Max file download size (MB) | `64` |
+| `relay.max_request_body_mb` | Max request body size (MB) | `128` |
+| `relay.tls_insecure_skip_verify` | Skip TLS verification | `false` |
+| `server.port` | Server port | `3000` |
 
-📖 **Complete configuration:** [Environment Variables Documentation](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables)
+📖 **Full configuration schema:** See [`config.example.json`](./config.example.json) in the project root
 
 </details>
 
@@ -339,8 +342,9 @@ docker run --name new-api -d --restart always \
 git clone https://github.com/QuantumNous/new-api.git
 cd new-api
 
-# Edit configuration
-nano docker-compose.yml
+# Create your configuration
+cp config.example.json config.json
+nano config.json
 
 # Start service
 docker-compose up -d
@@ -351,23 +355,28 @@ docker-compose up -d
 <details>
 <summary><strong>Method 2: Docker Commands</strong></summary>
 
+**Create configuration first:**
+```bash
+cp config.example.json config.json
+# Edit config.json with your settings
+```
+
 **Using SQLite:**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
+  -v $(pwd)/config.json:/config.json \
   -v ./data:/data \
-  calciumion/new-api:latest
+  calciumion/new-api:latest --config /config.json
 ```
 
 **Using MySQL:**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
-  -e TZ=Asia/Shanghai \
+  -v $(pwd)/config.json:/config.json \
   -v ./data:/data \
-  calciumion/new-api:latest
+  calciumion/new-api:latest --config /config.json
 ```
 
 > **💡 Path explanation:**
@@ -390,16 +399,16 @@ docker run --name new-api -d --restart always \
 ### ⚠️ Multi-machine Deployment Considerations
 
 > [!WARNING]
-> - **Must set** `SESSION_SECRET` - Otherwise login status inconsistent
-> - **Shared Redis must set** `CRYPTO_SECRET` - Otherwise data cannot be decrypted
+> - **Must set** `bootstrap.session_secret` - Otherwise login status inconsistent across nodes
+> - **Shared Redis must set** `bootstrap.crypto_secret` - Otherwise data cannot be decrypted
 
 ### 🔄 Channel Retry and Cache
 
 **Retry configuration:** `Settings → Operation Settings → General Settings → Failure Retry Count`
 
 **Cache configuration:**
-- `REDIS_CONN_STRING`: Redis cache (recommended)
-- `MEMORY_CACHE_ENABLED`: Memory cache
+- `redis.redis_conn_string`: Redis cache (recommended)
+- `bootstrap.memory_cache_enabled`: Memory cache
 
 ---
 

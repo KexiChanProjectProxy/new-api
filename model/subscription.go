@@ -51,35 +51,19 @@ var (
 )
 
 func subscriptionPlanCacheTTL() time.Duration {
-	ttlSeconds := common.GetEnvOrDefault("SUBSCRIPTION_PLAN_CACHE_TTL", 300)
-	if ttlSeconds <= 0 {
-		ttlSeconds = 300
-	}
-	return time.Duration(ttlSeconds) * time.Second
+	return 300 * time.Second
 }
 
 func subscriptionPlanInfoCacheTTL() time.Duration {
-	ttlSeconds := common.GetEnvOrDefault("SUBSCRIPTION_PLAN_INFO_CACHE_TTL", 120)
-	if ttlSeconds <= 0 {
-		ttlSeconds = 120
-	}
-	return time.Duration(ttlSeconds) * time.Second
+	return 120 * time.Second
 }
 
 func subscriptionPlanCacheCapacity() int {
-	capacity := common.GetEnvOrDefault("SUBSCRIPTION_PLAN_CACHE_CAP", 5000)
-	if capacity <= 0 {
-		capacity = 5000
-	}
-	return capacity
+	return 5000
 }
 
 func subscriptionPlanInfoCacheCapacity() int {
-	capacity := common.GetEnvOrDefault("SUBSCRIPTION_PLAN_INFO_CACHE_CAP", 10000)
-	if capacity <= 0 {
-		capacity = 10000
-	}
-	return capacity
+	return 10000
 }
 
 func getSubscriptionPlanCache() *cachex.HybridCache[SubscriptionPlan] {

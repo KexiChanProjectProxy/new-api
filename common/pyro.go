@@ -7,19 +7,27 @@ import (
 )
 
 func StartPyroScope() error {
+	pyroscopeUrl := ""
+	pyroscopeAppName := "new-api"
+	pyroscopeBasicAuthUser := ""
+	pyroscopeBasicAuthPassword := ""
+	pyroscopeHostname := "new-api"
+	mutexRate := 5
+	blockRate := 5
 
-	pyroscopeUrl := GetEnvOrDefaultString("PYROSCOPE_URL", "")
+	if startupCfg := GetStartupConfig(); startupCfg != nil {
+		pyroscopeUrl = startupCfg.Observability.Pyroscope.URL
+		pyroscopeAppName = startupCfg.Observability.Pyroscope.AppName
+		pyroscopeBasicAuthUser = startupCfg.Observability.Pyroscope.BasicAuthUser
+		pyroscopeBasicAuthPassword = startupCfg.Observability.Pyroscope.BasicAuthPassword
+		pyroscopeHostname = startupCfg.Observability.Pyroscope.Hostname
+		mutexRate = startupCfg.Observability.Pyroscope.MutexRate
+		blockRate = startupCfg.Observability.Pyroscope.BlockRate
+	}
+
 	if pyroscopeUrl == "" {
 		return nil
 	}
-
-	pyroscopeAppName := GetEnvOrDefaultString("PYROSCOPE_APP_NAME", "new-api")
-	pyroscopeBasicAuthUser := GetEnvOrDefaultString("PYROSCOPE_BASIC_AUTH_USER", "")
-	pyroscopeBasicAuthPassword := GetEnvOrDefaultString("PYROSCOPE_BASIC_AUTH_PASSWORD", "")
-	pyroscopeHostname := GetEnvOrDefaultString("HOSTNAME", "new-api")
-
-	mutexRate := GetEnvOrDefault("PYROSCOPE_MUTEX_RATE", 5)
-	blockRate := GetEnvOrDefault("PYROSCOPE_BLOCK_RATE", 5)
 
 	runtime.SetMutexProfileFraction(mutexRate)
 	runtime.SetBlockProfileRate(blockRate)

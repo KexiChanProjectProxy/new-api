@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -29,7 +28,6 @@ import (
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 
 	_ "net/http/pprof"
 )
@@ -41,6 +39,18 @@ var buildFS embed.FS
 var indexPage []byte
 
 func main() {
+	// Parse flags early so --version and --help work without requiring --config
+	common.ParseFlags()
+
+	if *common.PrintVersion {
+		fmt.Println(common.Version)
+		return
+	}
+	if *common.PrintHelp {
+		common.PrintHelpMessage()
+		return
+	}
+
 	startTime := time.Now()
 
 	err := InitResources()
@@ -50,7 +60,7 @@ func main() {
 	}
 
 	common.SysLog("New API " + common.Version + " started")
-	if os.Getenv("GIN_MODE") != "debug" {
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil && startupCfg.Server.GinMode != "" && startupCfg.Server.GinMode != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	if common.DebugEnabled {
@@ -96,12 +106,8 @@ func main() {
 	// 数据看板
 	go model.UpdateQuotaData()
 
-	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
-		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
-		if err != nil {
-			common.FatalLog("failed to parse CHANNEL_UPDATE_FREQUENCY: " + err.Error())
-		}
-		go controller.AutomaticallyUpdateChannels(frequency)
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil && startupCfg.Schedulers.ChannelUpdateFrequency > 0 {
+		go controller.AutomaticallyUpdateChannels(startupCfg.Schedulers.ChannelUpdateFrequency)
 	}
 
 	go controller.AutomaticallyTestChannels()
@@ -132,13 +138,12 @@ func main() {
 			controller.UpdateTaskBulk()
 		})
 	}
-	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
-		common.BatchUpdateEnabled = true
+	if common.BatchUpdateEnabled {
 		common.SysLog("batch update enabled with interval " + strconv.Itoa(common.BatchUpdateInterval) + "s")
 		model.InitBatchUpdater()
 	}
 
-	if os.Getenv("ENABLE_PPROF") == "true" {
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil && startupCfg.Observability.Pprof.Enabled {
 		gopool.Go(func() {
 			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
 		})
@@ -184,10 +189,7 @@ func main() {
 
 	// 设置路由
 	router.SetRouter(server, buildFS, indexPage)
-	var port = os.Getenv("PORT")
-	if port == "" {
-		port = strconv.Itoa(*common.Port)
-	}
+	port := strconv.Itoa(*common.Port)
 
 	// Log startup success message
 	common.LogStartupSuccess(startTime, port)
@@ -200,9 +202,9 @@ func main() {
 
 func InjectUmamiAnalytics() {
 	analyticsInjectBuilder := &strings.Builder{}
-	if os.Getenv("UMAMI_WEBSITE_ID") != "" {
-		umamiSiteID := os.Getenv("UMAMI_WEBSITE_ID")
-		umamiScriptURL := os.Getenv("UMAMI_SCRIPT_URL")
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil && startupCfg.Analytics != nil && startupCfg.Analytics.UmamiWebsiteID != "" {
+		umamiSiteID := startupCfg.Analytics.UmamiWebsiteID
+		umamiScriptURL := startupCfg.Analytics.UmamiScriptURL
 		if umamiScriptURL == "" {
 			umamiScriptURL = "https://analytics.umami.is/script.js"
 		}
@@ -219,9 +221,8 @@ func InjectUmamiAnalytics() {
 
 func InjectGoogleAnalytics() {
 	analyticsInjectBuilder := &strings.Builder{}
-	if os.Getenv("GOOGLE_ANALYTICS_ID") != "" {
-		gaID := os.Getenv("GOOGLE_ANALYTICS_ID")
-		// Google Analytics 4 (gtag.js)
+	if startupCfg := common.GetStartupConfig(); startupCfg != nil && startupCfg.Analytics != nil && startupCfg.Analytics.GoogleAnalyticsID != "" {
+		gaID := startupCfg.Analytics.GoogleAnalyticsID
 		analyticsInjectBuilder.WriteString("<script async src=\"https://www.googletagmanager.com/gtag/js?id=")
 		analyticsInjectBuilder.WriteString(gaID)
 		analyticsInjectBuilder.WriteString("\"></script>")
@@ -242,30 +243,24 @@ func InjectGoogleAnalytics() {
 func InitResources() error {
 	// Initialize resources here if needed
 	// This is a placeholder function for future resource initialization
-	err := godotenv.Load(".env")
-	if err != nil {
-		if common.DebugEnabled {
-			common.SysLog("No .env file found, using default environment variables. If needed, please create a .env file and set the relevant variables.")
-		}
-	}
 
 	common.ParseFlags()
 
-	configPath := common.GetJsonConfigPath()
-	if configPath != "" {
-		jc, err := common.LoadJsonConfigFile(configPath)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				common.SysLog("failed to load JSON config: " + err.Error())
-			}
-		} else {
-			jc.ApplyToEnv()
-			common.SysLog("loaded JSON config from: " + configPath)
-		}
+	configPath := common.GetConfigFilePath()
+	if configPath == "" {
+		common.FatalLog("--config flag is required: no configuration file path provided")
+		return fmt.Errorf("--config flag is required")
 	}
 
-	// 加载环境变量
-	common.InitEnv()
+	startupCfg, err := common.LoadStartupConfig(configPath)
+	if err != nil {
+		common.FatalLog("failed to load startup config: " + err.Error())
+		return err
+	}
+
+	common.SetStartupConfig(startupCfg)
+	startupCfg.ApplyToBootstrapGlobals()
+	startupCfg.InitEnvFromStartupConfig()
 
 	logger.SetupLogger()
 

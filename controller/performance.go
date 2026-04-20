@@ -195,10 +195,10 @@ type LogFilesResponse struct {
 
 // getLogFiles 读取日志目录中的日志文件列表
 func getLogFiles() ([]LogFileInfo, error) {
-	if *common.LogDir == "" {
+	if common.LogDir == "" {
 		return nil, nil
 	}
-	entries, err := os.ReadDir(*common.LogDir)
+	entries, err := os.ReadDir(common.LogDir)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func getLogFiles() ([]LogFileInfo, error) {
 
 // GetLogFiles 获取日志文件列表
 func GetLogFiles(c *gin.Context) {
-	if *common.LogDir == "" {
+	if common.LogDir == "" {
 		common.ApiSuccess(c, LogFilesResponse{Enabled: false})
 		return
 	}
@@ -251,7 +251,7 @@ func GetLogFiles(c *gin.Context) {
 		}
 	}
 	resp := LogFilesResponse{
-		LogDir:    *common.LogDir,
+		LogDir:    common.LogDir,
 		Enabled:   true,
 		FileCount: len(files),
 		TotalSize: totalSize,
@@ -277,7 +277,7 @@ func CleanupLogFiles(c *gin.Context) {
 		common.ApiErrorMsg(c, "invalid value, must be a positive integer")
 		return
 	}
-	if *common.LogDir == "" {
+	if common.LogDir == "" {
 		common.ApiErrorMsg(c, "log directory not configured")
 		return
 	}
@@ -298,7 +298,7 @@ func CleanupLogFiles(c *gin.Context) {
 			if i < value {
 				continue
 			}
-			fullPath := filepath.Join(*common.LogDir, f.Name)
+			fullPath := filepath.Join(common.LogDir, f.Name)
 			if fullPath == activeLogPath {
 				continue
 			}
@@ -308,7 +308,7 @@ func CleanupLogFiles(c *gin.Context) {
 		cutoff := time.Now().AddDate(0, 0, -value)
 		for _, f := range files {
 			if f.ModTime.Before(cutoff) {
-				fullPath := filepath.Join(*common.LogDir, f.Name)
+				fullPath := filepath.Join(common.LogDir, f.Name)
 				if fullPath == activeLogPath {
 					continue
 				}
@@ -321,7 +321,7 @@ func CleanupLogFiles(c *gin.Context) {
 	var freedBytes int64
 	var failedFiles []string
 	for _, f := range toDelete {
-		fullPath := filepath.Join(*common.LogDir, f.Name)
+		fullPath := filepath.Join(common.LogDir, f.Name)
 		if err := os.Remove(fullPath); err != nil {
 			failedFiles = append(failedFiles, f.Name)
 			continue
