@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"hash/fnv"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -616,6 +617,9 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			return 0, false
 		}
 		if found {
+			if IsChannelAffinityCooldown(c, channelID) {
+				return 0, false
+			}
 			return channelID, true
 		}
 		return 0, false
@@ -678,6 +682,14 @@ func AppendChannelAffinityAdminInfo(c *gin.Context, adminInfo map[string]interfa
 	adminInfo["channel_affinity"] = anyInfo
 }
 
+func IsChannelAffinityActive(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	_, _, ok := getChannelAffinityContext(c)
+	return ok
+}
+
 func RecordChannelAffinity(c *gin.Context, channelID int) {
 	if channelID <= 0 {
 		return
@@ -704,6 +716,126 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	cache := getChannelAffinityCache()
 	if err := cache.SetWithTTL(cacheKey, channelID, time.Duration(ttlSeconds)*time.Second); err != nil {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
+	}
+}
+
+// InvalidateChannelAffinity removes the affinity cache entry for the current request's affinity key,
+// so that subsequent requests with the same affinity key will not be pinned to the same (failed) channel.
+func InvalidateChannelAffinity(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	cacheKey, _, ok := getChannelAffinityContext(c)
+	if !ok {
+		return
+	}
+	cache := getChannelAffinityCache()
+	if _, err := cache.DeleteMany([]string{cacheKey}); err != nil {
+		common.SysError(fmt.Sprintf("channel affinity cache invalidate failed: key=%s, err=%v", cacheKey, err))
+	}
+}
+
+// --- Channel affinity cooldown ---
+//
+// When a channel returns an upstream error (non-2xx), we record a short-lived cooldown entry
+// so that GetPreferredChannelByAffinity will skip this channel for the duration.
+// This prevents the same affinity key from immediately re-selecting a recently-failed channel.
+//
+// Cooldown durations:
+//   - 429 Too Many Requests → 30s
+//   - 5xx Server Error     → 60s
+//   - other non-2xx        → 30s (default)
+
+const (
+	channelAffinityCooldownNamespace = "new-api:channel_affinity_cooldown:v1"
+
+	channelAffinityCooldown429  = 30 // seconds
+	channelAffinityCooldown5xx  = 60 // seconds
+	channelAffinityCooldownDefault = 30 // seconds
+)
+
+var (
+	channelAffinityCooldownCacheOnce sync.Once
+	channelAffinityCooldownCache     *cachex.HybridCache[int64] // value = expiry unix timestamp
+)
+
+func getChannelAffinityCooldownCache() *cachex.HybridCache[int64] {
+	channelAffinityCooldownCacheOnce.Do(func() {
+		setting := operation_setting.GetChannelAffinitySetting()
+		capacity := setting.MaxEntries
+		if capacity <= 0 {
+			capacity = 100_000
+		}
+
+		channelAffinityCooldownCache = cachex.NewHybridCache[int64](cachex.HybridCacheConfig[int64]{
+			Namespace: cachex.Namespace(channelAffinityCooldownNamespace),
+			Redis:     common.RDB,
+			RedisEnabled: func() bool {
+				return common.RedisEnabled && common.RDB != nil
+			},
+			RedisCodec: cachex.Int64Codec{},
+			Memory: func() *hot.HotCache[string, int64] {
+				return hot.NewHotCache[string, int64](hot.LRU, capacity).
+					WithTTL(time.Duration(channelAffinityCooldown5xx) * time.Second).
+					WithJanitor().
+					Build()
+			},
+		})
+	})
+	return channelAffinityCooldownCache
+}
+
+// buildChannelAffinityCooldownKey builds the cooldown cache key from the affinity cache key suffix and channel ID.
+func buildChannelAffinityCooldownKey(affinityCacheKey string, channelID int) string {
+	return fmt.Sprintf("%s:ch%d", affinityCacheKey, channelID)
+}
+
+// IsChannelAffinityCooldown checks whether the given channel is currently in cooldown for the current affinity key.
+func IsChannelAffinityCooldown(c *gin.Context, channelID int) bool {
+	if c == nil || channelID <= 0 {
+		return false
+	}
+	cacheKey, _, ok := getChannelAffinityContext(c)
+	if !ok {
+		return false
+	}
+	cooldownKey := buildChannelAffinityCooldownKey(cacheKey, channelID)
+	cache := getChannelAffinityCooldownCache()
+	expiry, found, err := cache.Get(cooldownKey)
+	if err != nil || !found {
+		return false
+	}
+	return time.Now().Unix() < expiry
+}
+
+// MarkChannelAffinityCooldown records a cooldown for the affinity-selected channel based on the upstream HTTP status code.
+//   - 429 → 30s cooldown
+//   - 5xx → 60s cooldown
+//   - other non-2xx → 30s cooldown
+func MarkChannelAffinityCooldown(c *gin.Context, channelID int, statusCode int) {
+	if c == nil || channelID <= 0 {
+		return
+	}
+	cacheKey, _, ok := getChannelAffinityContext(c)
+	if !ok {
+		return
+	}
+
+	var cooldownSeconds int
+	switch {
+	case statusCode == http.StatusTooManyRequests: // 429
+		cooldownSeconds = channelAffinityCooldown429
+	case statusCode >= 500 && statusCode < 600:
+		cooldownSeconds = channelAffinityCooldown5xx
+	default:
+		cooldownSeconds = channelAffinityCooldownDefault
+	}
+
+	cooldownKey := buildChannelAffinityCooldownKey(cacheKey, channelID)
+	expiry := time.Now().Add(time.Duration(cooldownSeconds) * time.Second).Unix()
+	cache := getChannelAffinityCooldownCache()
+	if err := cache.SetWithTTL(cooldownKey, expiry, time.Duration(cooldownSeconds)*time.Second); err != nil {
+		common.SysError(fmt.Sprintf("channel affinity cooldown cache set failed: key=%s, err=%v", cooldownKey, err))
 	}
 }
 

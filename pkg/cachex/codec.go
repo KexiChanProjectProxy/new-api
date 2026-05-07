@@ -31,6 +31,20 @@ type StringCodec struct{}
 func (c StringCodec) Encode(v string) (string, error) { return v, nil }
 func (c StringCodec) Decode(s string) (string, error) { return s, nil }
 
+type Int64Codec struct{}
+
+func (c Int64Codec) Encode(v int64) (string, error) {
+	return strconv.FormatInt(v, 10), nil
+}
+
+func (c Int64Codec) Decode(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty int64 value")
+	}
+	return strconv.ParseInt(s, 10, 64)
+}
+
 type JSONCodec[V any] struct{}
 
 func (c JSONCodec[V]) Encode(v V) (string, error) {
