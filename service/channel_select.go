@@ -12,11 +12,12 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	Retry        *int
-	resetNextTry bool
+	Ctx            *gin.Context
+	TokenGroup     string
+	ModelName      string
+	Retry          *int
+	RoutingFamily  common.RoutingFamily
+	resetNextTry   bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -85,6 +86,14 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	var routingFamily common.RoutingFamily
+	if param.RoutingFamily != "" {
+		routingFamily = param.RoutingFamily
+	} else if val, ok := common.GetContextKey(param.Ctx, constant.ContextKeyRequestRoutingFamily); ok {
+		if rf, rfOk := val.(common.RoutingFamily); rfOk {
+			routingFamily = rf
+		}
+	}
 
 	if param.TokenGroup == "auto" {
 		if len(setting.GetAutoGroups()) == 0 {
@@ -115,7 +124,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, routingFamily)
+			// If same-family preference yielded nothing, try cross-family at the same priority
+			if channel == nil && routingFamily != common.RoutingFamilyNone {
+				channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, common.RoutingFamilyNone)
+			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -153,7 +166,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), routingFamily)
+		if channel == nil && err == nil && routingFamily != common.RoutingFamilyNone {
+			channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), common.RoutingFamilyNone)
+		}
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
