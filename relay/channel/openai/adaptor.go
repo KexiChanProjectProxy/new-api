@@ -26,7 +26,9 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/common_handler"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/transformer"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
@@ -55,11 +57,26 @@ func parseReasoningEffortFromModelSuffix(model string) (string, string) {
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
-	// 使用 service.GeminiToOpenAIRequest 转换请求格式
-	openaiRequest, err := service.GeminiToOpenAIRequest(request, info)
+	var openaiRequest *dto.GeneralOpenAIRequest
+	if setting.TransformerEnabled {
+		storage, err := common.GetBodyStorage(c)
+		if err == nil {
+			raw, err := storage.Bytes()
+			if err == nil {
+				transformed, tfErr := transformer.ConvertRequestBetweenFormats(raw, types.RelayFormatGemini, types.RelayFormatOpenAI)
+				if tfErr == nil && len(transformed) > 0 {
+					if unmarshalErr := common.Unmarshal(transformed, &openaiRequest); unmarshalErr == nil {
+						return a.ConvertOpenAIRequest(c, info, openaiRequest)
+					}
+				}
+			}
+		}
+	}
+	legacyRequest, err := service.GeminiToOpenAIRequest(request, info)
 	if err != nil {
 		return nil, err
 	}
+	openaiRequest = legacyRequest
 	return a.ConvertOpenAIRequest(c, info, openaiRequest)
 }
 
@@ -74,10 +91,29 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	//		println(fmt.Sprintf("failed to save request body to file: %v", err))
 	//	}
 	//}
-	aiRequest, err := service.ClaudeToOpenAIRequest(*request, info)
+	var aiRequest *dto.GeneralOpenAIRequest
+	if setting.TransformerEnabled {
+		storage, err := common.GetBodyStorage(c)
+		if err == nil {
+			raw, err := storage.Bytes()
+			if err == nil {
+				transformed, tfErr := transformer.ConvertRequestBetweenFormats(raw, types.RelayFormatClaude, types.RelayFormatOpenAI)
+				if tfErr == nil && len(transformed) > 0 {
+					if unmarshalErr := common.Unmarshal(transformed, &aiRequest); unmarshalErr == nil {
+						if info.SupportStreamOptions && info.IsStream {
+							aiRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
+						}
+						return a.ConvertOpenAIRequest(c, info, aiRequest)
+					}
+				}
+			}
+		}
+	}
+	legacyRequest, err := service.ClaudeToOpenAIRequest(*request, info)
 	if err != nil {
 		return nil, err
 	}
+	aiRequest = legacyRequest
 	//if common.DebugEnabled {
 	//	println(fmt.Sprintf("convert claude to openai request result: %s", common.GetJsonString(aiRequest)))
 	//	// Save request body to file for debugging
@@ -243,6 +279,30 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
 	if request == nil {
 		return nil, errors.New("request is nil")
+	}
+	if setting.TransformerEnabled {
+		storage, err := common.GetBodyStorage(c)
+		if err == nil {
+			raw, err := storage.Bytes()
+			if err == nil {
+				sourceFormat := info.RelayFormat
+				targetFormat := info.GetFinalRequestRelayFormat()
+				inbound, sourceOK := transformer.GetTransformer(sourceFormat)
+				outbound, targetOK := transformer.GetTransformer(targetFormat)
+				if sourceOK && targetOK {
+					pivot, err := inbound.Inbound(raw)
+					if err == nil && pivot != nil {
+						out, err := outbound.Outbound(pivot)
+						if err == nil && len(out) > 0 {
+							var transformed dto.GeneralOpenAIRequest
+							if err = common.Unmarshal(out, &transformed); err == nil {
+								return &transformed, nil
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 	if info.ChannelType != constant.ChannelTypeOpenAI && info.ChannelType != constant.ChannelTypeAzure {
 		request.StreamOptions = nil

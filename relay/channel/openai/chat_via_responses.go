@@ -12,7 +12,9 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/transformer"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -74,9 +76,23 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseBody []byte
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
+		if setting.TransformerEnabled {
+			converted, tfErr := transformer.ConvertOpenAIResponseToFormat(chatResp, types.RelayFormatClaude)
+			if tfErr == nil && len(converted) > 0 {
+				responseBody = converted
+				break
+			}
+		}
 		claudeResp := service.ResponseOpenAI2Claude(chatResp, info)
 		responseBody, err = common.Marshal(claudeResp)
 	case types.RelayFormatGemini:
+		if setting.TransformerEnabled {
+			converted, tfErr := transformer.ConvertOpenAIResponseToFormat(chatResp, types.RelayFormatGemini)
+			if tfErr == nil && len(converted) > 0 {
+				responseBody = converted
+				break
+			}
+		}
 		geminiResp := service.ResponseOpenAI2Gemini(chatResp, info)
 		responseBody, err = common.Marshal(geminiResp)
 	default:

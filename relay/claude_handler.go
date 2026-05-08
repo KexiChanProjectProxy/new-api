@@ -13,7 +13,9 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/transformer"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
@@ -131,10 +133,32 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
-		openAIRequest, convErr := service.ClaudeToOpenAIRequest(*request, info)
+		var openAIRequest *dto.GeneralOpenAIRequest
+		if setting.TransformerEnabled {
+			storage, getErr := common.GetBodyStorage(c)
+			if getErr == nil {
+				raw, bytesErr := storage.Bytes()
+				if bytesErr == nil {
+					transformed, tfErr := transformer.ConvertRequestBetweenFormats(raw, types.RelayFormatClaude, types.RelayFormatOpenAI)
+					if tfErr == nil && len(transformed) > 0 {
+						if unmarshalErr := common.Unmarshal(transformed, &openAIRequest); unmarshalErr == nil {
+							usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
+							if newApiErr != nil {
+								return newApiErr
+							}
+							service.PostTextConsumeQuota(c, info, usage, nil)
+							return nil
+						}
+					}
+				}
+			}
+		}
+
+		legacyOpenAIRequest, convErr := service.ClaudeToOpenAIRequest(*request, info)
 		if convErr != nil {
 			return types.NewError(convErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
+		openAIRequest = legacyOpenAIRequest
 
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
 		if newApiErr != nil {

@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/transformer"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
@@ -24,6 +27,30 @@ type Adaptor struct {
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
+	if setting.TransformerEnabled {
+		storage, err := common.GetBodyStorage(c)
+		if err == nil {
+			raw, err := storage.Bytes()
+			if err == nil {
+				sourceFormat := info.RelayFormat
+				targetFormat := info.GetFinalRequestRelayFormat()
+				inbound, sourceOK := transformer.GetTransformer(sourceFormat)
+				outbound, targetOK := transformer.GetTransformer(targetFormat)
+				if sourceOK && targetOK {
+					pivot, err := inbound.Inbound(raw)
+					if err == nil && pivot != nil {
+						out, err := outbound.Outbound(pivot)
+						if err == nil && len(out) > 0 {
+							var transformed dto.GeminiChatRequest
+							if err = common.Unmarshal(out, &transformed); err == nil {
+								return &transformed, nil
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 	if len(request.Contents) > 0 {
 		for i, content := range request.Contents {
 			if i == 0 {
