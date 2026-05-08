@@ -93,10 +93,10 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+func GetRandomSatisfiedChannel(group string, model string, retry int, routingFamily common.RoutingFamily) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannel(group, model, retry, routingFamily)
 	}
 
 	channelSyncLock.RLock()
@@ -113,6 +113,21 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 
 	if len(channels) == 0 {
 		return nil, nil
+	}
+
+	// Prefer same-family candidates; cross-family fallback when none exist.
+	if routingFamily != common.RoutingFamilyNone && len(channels) > 1 {
+		sameFamilyChannels := make([]int, 0, len(channels))
+		for _, channelId := range channels {
+			if ch, ok := channelsIDM[channelId]; ok {
+				if common.ChannelTypeToRoutingFamily(ch.Type) == routingFamily {
+					sameFamilyChannels = append(sameFamilyChannels, channelId)
+				}
+			}
+		}
+		if len(sameFamilyChannels) > 0 {
+			channels = sameFamilyChannels
+		}
 	}
 
 	if len(channels) == 1 {
@@ -262,4 +277,15 @@ func CacheUpdateChannel(channel *Channel) {
 	println("before:", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
 	channelsIDM[channel.Id] = channel
 	println("after :", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
+}
+
+// SetupTestChannelCache replaces the in-memory channel cache with the provided
+// data for testing. The caller must provide the channelsIDM and
+// group2model2channels maps. It acquires the write lock for the duration.
+func SetupTestChannelCache(idm map[int]*Channel, g2m2c map[string]map[string][]int) {
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+	common.MemoryCacheEnabled = true
+	channelsIDM = idm
+	group2model2channels = g2m2c
 }

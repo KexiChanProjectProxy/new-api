@@ -103,7 +103,7 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	return channelQuery, nil
 }
 
-func GetChannel(group string, model string, retry int) (*Channel, error) {
+func GetChannel(group string, model string, retry int, routingFamily common.RoutingFamily) (*Channel, error) {
 	var abilities []Ability
 
 	var err error = nil
@@ -119,6 +119,21 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Prefer same-family candidates; cross-family fallback when none exist.
+	if routingFamily != common.RoutingFamilyNone && len(abilities) > 0 {
+		var sameFamilyAbilities []Ability
+		for _, a := range abilities {
+			ch, chErr := GetChannelById(a.ChannelId, true)
+			if chErr == nil && ch != nil && common.ChannelTypeToRoutingFamily(ch.Type) == routingFamily {
+				sameFamilyAbilities = append(sameFamilyAbilities, a)
+			}
+		}
+		if len(sameFamilyAbilities) > 0 {
+			abilities = sameFamilyAbilities
+		}
+	}
+
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one
