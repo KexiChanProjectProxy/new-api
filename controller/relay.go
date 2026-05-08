@@ -140,6 +140,7 @@ func mcpRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIE
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	common.SetContextKey(c, constant.ContextKeyRequestRoutingFamily, common.RelayFormatToRoutingFamily(string(relayFormat)))
 
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -254,16 +255,18 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:           c,
+		TokenGroup:    relayInfo.TokenGroup,
+		ModelName:     relayInfo.OriginModelName,
+		Retry:         common.GetPointer(0),
+		RoutingFamily: common.RelayFormatToRoutingFamily(string(relayFormat)),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		common.SetContextKey(c, constant.ContextKeyRequestRoutingFamily, retryParam.RoutingFamily)
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -579,13 +582,15 @@ func RelayTask(c *gin.Context) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:           c,
+		TokenGroup:    relayInfo.TokenGroup,
+		ModelName:     relayInfo.OriginModelName,
+		Retry:         common.GetPointer(0),
+		RoutingFamily: common.RoutingFamilyNone,
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		common.SetContextKey(c, constant.ContextKeyRequestRoutingFamily, retryParam.RoutingFamily)
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {

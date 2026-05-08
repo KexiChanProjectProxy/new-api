@@ -66,4 +66,11 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+
+	// ContextKeyRequestRoutingFamily stores the request's routing family (openai/anthropic)
+	// derived from the request path or relay format.
+	ContextKeyRequestRoutingFamily ContextKey = "request_routing_family"
+	// ContextKeyChannelRoutingFamily stores the selected channel's routing family
+	// derived from its channel type.
+	ContextKeyChannelRoutingFamily ContextKey = "channel_routing_family"
 )
