@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRelaySubpathRegistration(t *testing.T) {
@@ -98,4 +99,30 @@ func TestNoSubpathNoAlias(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code, "subpath route should not exist when not configured")
+}
+
+func TestRelayV1RouteFamilyCoverage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	common.RelaySubpaths = nil
+	SetRelayRouter(r)
+
+	routes := r.Routes()
+
+	hasRoute := func(method string, path string) bool {
+		for _, route := range routes {
+			if route.Method == method && route.Path == path {
+				return true
+			}
+		}
+		return false
+	}
+
+	require.True(t, hasRoute(http.MethodPost, "/v1/messages"), "Anthropic entrypoint must be registered")
+	require.True(t, hasRoute(http.MethodPost, "/v1/chat/completions"), "OpenAI chat entrypoint must be registered")
+	require.True(t, hasRoute(http.MethodPost, "/v1/completions"), "OpenAI completions entrypoint must be registered")
+
+	assert.Equal(t, common.RoutingFamilyAnthropic, common.PathToRoutingFamily("/v1/messages"), "messages path should map to Anthropic family")
+	assert.Equal(t, common.RoutingFamilyOpenAI, common.PathToRoutingFamily("/v1/chat/completions"), "chat completions should map to OpenAI family")
+	assert.Equal(t, common.RoutingFamilyOpenAI, common.PathToRoutingFamily("/v1/completions"), "completions should map to OpenAI family")
 }
