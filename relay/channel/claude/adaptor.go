@@ -7,12 +7,9 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/transformer"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -28,30 +25,6 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	if setting.TransformerEnabled {
-		storage, err := common.GetBodyStorage(c)
-		if err == nil {
-			raw, err := storage.Bytes()
-			if err == nil {
-				sourceFormat := info.RelayFormat
-				targetFormat := info.GetFinalRequestRelayFormat()
-				inbound, sourceOK := transformer.GetTransformer(sourceFormat)
-				outbound, targetOK := transformer.GetTransformer(targetFormat)
-				if sourceOK && targetOK {
-					pivot, err := inbound.Inbound(raw)
-					if err == nil && pivot != nil {
-						out, err := outbound.Outbound(pivot)
-						if err == nil && len(out) > 0 {
-							var transformed dto.ClaudeRequest
-							if err = common.Unmarshal(out, &transformed); err == nil {
-								return &transformed, nil
-							}
-						}
-					}
-				}
-			}
-		}
-	}
 	return request, nil
 }
 

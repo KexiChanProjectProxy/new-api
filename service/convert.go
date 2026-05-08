@@ -14,7 +14,6 @@ import (
 	"github.com/samber/lo"
 )
 
-// Deprecated: Use relay/transformer package instead. This function will be removed in a future version.
 func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	openAIRequest := dto.GeneralOpenAIRequest{
 		Model:       claudeRequest.Model,
@@ -248,13 +247,11 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	return usage
 }
 
-// Deprecated: Use relay/transformer package instead. This function will be removed in a future version.
 func NormalizeCacheCreationSplit(totalTokens int, tokens5m int, tokens1h int) (int, int) {
 	remainder := lo.Max([]int{totalTokens - tokens5m - tokens1h, 0})
 	return tokens5m + remainder, tokens1h
 }
 
-// Deprecated: Use relay/transformer package instead. This function will be removed in a future version.
 func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
 	if info.ClaudeConvertInfo.Done {
 		return nil
@@ -607,7 +604,6 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 	return claudeResponses
 }
 
-// Deprecated: Use relay/transformer package instead. This function will be removed in a future version.
 func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relaycommon.RelayInfo) *dto.ClaudeResponse {
 	var stopReason string
 	contents := make([]dto.ClaudeMediaMessage, 0)
@@ -659,7 +655,6 @@ func toJSONString(v interface{}) string {
 	return string(b)
 }
 
-// Deprecated: Use relay/transformer package instead. This function will be removed in a future version.
 func GeminiToOpenAIRequest(geminiRequest *dto.GeminiChatRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	openaiRequest := &dto.GeneralOpenAIRequest{
 		Model:  info.UpstreamModelName,
@@ -830,7 +825,6 @@ func extractTextFromGeminiParts(parts []dto.GeminiPart) string {
 }
 
 // ResponseOpenAI2Gemini 将 OpenAI 响应转换为 Gemini 格式
-// Deprecated: Use relay/transformer package instead. This function will be removed in a future version.
 func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relaycommon.RelayInfo) *dto.GeminiChatResponse {
 	geminiResponse := &dto.GeminiChatResponse{
 		Candidates: make([]dto.GeminiChatCandidate, 0, len(openAIResponse.Choices)),
@@ -910,7 +904,6 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relayco
 }
 
 // StreamResponseOpenAI2Gemini 将 OpenAI 流式响应转换为 Gemini 格式
-// Deprecated: Use relay/transformer package instead. This function will be removed in a future version.
 func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) *dto.GeminiChatResponse {
 	// 检查是否有实际内容或结束标志
 	hasContent := false

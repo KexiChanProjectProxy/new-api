@@ -10,9 +10,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relay/transformer"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
@@ -44,18 +42,7 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	if streamResponse.Usage != nil {
 		info.ClaudeConvertInfo.Usage = streamResponse.Usage
 	}
-	var claudeResponses []*dto.ClaudeResponse
-	if setting.TransformerEnabled {
-		converted, tfErr := transformer.ConvertOpenAIStreamToFormat(&streamResponse, types.RelayFormatClaude)
-		if tfErr == nil && len(converted) > 0 {
-			if unmarshalErr := common.Unmarshal(converted, &claudeResponses); unmarshalErr == nil {
-				goto claudeStreamConverted
-			}
-		}
-	}
-	claudeResponses = service.StreamResponseOpenAI2Claude(&streamResponse, info)
-
-claudeStreamConverted:
+	claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
 	for _, resp := range claudeResponses {
 		helper.ClaudeData(c, *resp)
 	}
@@ -69,18 +56,7 @@ func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 		return err
 	}
 
-	var geminiResponse *dto.GeminiChatResponse
-	if setting.TransformerEnabled {
-		converted, tfErr := transformer.ConvertOpenAIStreamToFormat(&streamResponse, types.RelayFormatGemini)
-		if tfErr == nil && len(converted) > 0 {
-			if unmarshalErr := common.Unmarshal(converted, &geminiResponse); unmarshalErr == nil {
-				goto geminiStreamConverted
-			}
-		}
-	}
-	geminiResponse = service.StreamResponseOpenAI2Gemini(&streamResponse, info)
-
-geminiStreamConverted:
+	geminiResponse := service.StreamResponseOpenAI2Gemini(&streamResponse, info)
 
 	// 如果返回 nil，表示没有实际内容，跳过发送
 	if geminiResponse == nil {
@@ -240,18 +216,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 		info.ClaudeConvertInfo.Usage = usage
 
-		var claudeResponses []*dto.ClaudeResponse
-		if setting.TransformerEnabled {
-			converted, tfErr := transformer.ConvertOpenAIStreamToFormat(&streamResponse, types.RelayFormatClaude)
-			if tfErr == nil && len(converted) > 0 {
-				if unmarshalErr := common.Unmarshal(converted, &claudeResponses); unmarshalErr == nil {
-					goto finalClaudeStreamConverted
-				}
-			}
-		}
-		claudeResponses = service.StreamResponseOpenAI2Claude(&streamResponse, info)
-
-	finalClaudeStreamConverted:
+		claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
 		for _, resp := range claudeResponses {
 			_ = helper.ClaudeData(c, *resp)
 		}
@@ -269,18 +234,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		// 而包含最后一段文本输出的响应（倒数第二个）的 finishReason 为 null
 		// 暂不知是否有程序会不兼容。
 
-		var geminiResponse *dto.GeminiChatResponse
-		if setting.TransformerEnabled {
-			converted, tfErr := transformer.ConvertOpenAIStreamToFormat(&streamResponse, types.RelayFormatGemini)
-			if tfErr == nil && len(converted) > 0 {
-				if unmarshalErr := common.Unmarshal(converted, &geminiResponse); unmarshalErr == nil {
-					goto finalGeminiStreamConverted
-				}
-			}
-		}
-		geminiResponse = service.StreamResponseOpenAI2Gemini(&streamResponse, info)
-
-	finalGeminiStreamConverted:
+		geminiResponse := service.StreamResponseOpenAI2Gemini(&streamResponse, info)
 
 		// openai 流响应开头的空数据
 		if geminiResponse == nil {

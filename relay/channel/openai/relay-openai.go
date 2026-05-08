@@ -13,9 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relay/transformer"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 
 	"github.com/QuantumNous/new-api/types"
 
@@ -281,13 +279,6 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			break
 		}
 	case types.RelayFormatClaude:
-		if setting.TransformerEnabled {
-			converted, tfErr := transformer.ConvertOpenAIResponseToFormat(&simpleResponse, types.RelayFormatClaude)
-			if tfErr == nil && len(converted) > 0 {
-				responseBody = converted
-				break
-			}
-		}
 		claudeResp := service.ResponseOpenAI2Claude(&simpleResponse, info)
 		claudeRespStr, err := common.Marshal(claudeResp)
 		if err != nil {
@@ -295,13 +286,6 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		}
 		responseBody = claudeRespStr
 	case types.RelayFormatGemini:
-		if setting.TransformerEnabled {
-			converted, tfErr := transformer.ConvertOpenAIResponseToFormat(&simpleResponse, types.RelayFormatGemini)
-			if tfErr == nil && len(converted) > 0 {
-				responseBody = converted
-				break
-			}
-		}
 		geminiResp := service.ResponseOpenAI2Gemini(&simpleResponse, info)
 		geminiRespStr, err := common.Marshal(geminiResp)
 		if err != nil {

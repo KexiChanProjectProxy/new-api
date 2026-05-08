@@ -7,16 +7,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/transformer"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -59,26 +56,10 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 		return req, nil
 	}
 
-	var oaiReq *dto.GeneralOpenAIRequest
-	if setting.TransformerEnabled {
-		raw, marshalErr := common.Marshal(req)
-		if marshalErr == nil {
-			transformed, tfErr := transformer.ConvertRequestBetweenFormats(raw, types.RelayFormatClaude, types.RelayFormatOpenAI)
-			if tfErr == nil && len(transformed) > 0 {
-				if unmarshalErr := common.Unmarshal(transformed, &oaiReq); unmarshalErr == nil {
-					if info.SupportStreamOptions && info.IsStream {
-						oaiReq.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
-					}
-					return a.ConvertOpenAIRequest(c, info, oaiReq)
-				}
-			}
-		}
-	}
-	legacyReq, err := service.ClaudeToOpenAIRequest(*req, info)
+	oaiReq, err := service.ClaudeToOpenAIRequest(*req, info)
 	if err != nil {
 		return nil, err
 	}
-	oaiReq = legacyReq
 	if info.SupportStreamOptions && info.IsStream {
 		oaiReq.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 	}

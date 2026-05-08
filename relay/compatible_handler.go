@@ -11,13 +11,10 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relay/transformer"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -110,11 +107,75 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 		requestBody = common.ReaderOnly(storage)
 	} else {
-		jsonData, err := buildTextRequestBody(c, info, adaptor, request)
+		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {
-			return err
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
+		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+
+		if info.ChannelSetting.SystemPrompt != "" {
+			// 如果有系统提示，则将其添加到请求中
+			request, ok := convertedRequest.(*dto.GeneralOpenAIRequest)
+			if ok {
+				containSystemPrompt := false
+				for _, message := range request.Messages {
+					if message.Role == request.GetSystemRoleName() {
+						containSystemPrompt = true
+						break
+					}
+				}
+				if !containSystemPrompt {
+					// 如果没有系统提示，则添加系统提示
+					systemMessage := dto.Message{
+						Role:    request.GetSystemRoleName(),
+						Content: info.ChannelSetting.SystemPrompt,
+					}
+					request.Messages = append([]dto.Message{systemMessage}, request.Messages...)
+				} else if info.ChannelSetting.SystemPromptOverride {
+					common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
+					// 如果有系统提示，且允许覆盖，则拼接到前面
+					for i, message := range request.Messages {
+						if message.Role == request.GetSystemRoleName() {
+							if message.IsStringContent() {
+								request.Messages[i].SetStringContent(info.ChannelSetting.SystemPrompt + "\n" + message.StringContent())
+							} else {
+								contents := message.ParseContent()
+								contents = append([]dto.MediaContent{
+									{
+										Type: dto.ContentTypeText,
+										Text: info.ChannelSetting.SystemPrompt,
+									},
+								}, contents...)
+								request.Messages[i].Content = contents
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+
+		jsonData, err := common.Marshal(convertedRequest)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())
+		}
+
+		// remove disabled fields for OpenAI API
+		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+
+		// apply param override
+		if len(info.ParamOverride) > 0 {
+			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+			if err != nil {
+				return newAPIErrorFromParamOverride(err)
+			}
+		}
+
 		logger.LogDebug(c, fmt.Sprintf("text request body: %s", string(jsonData)))
+
 		requestBody = bytes.NewBuffer(jsonData)
 	}
 
@@ -153,96 +214,4 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	}
 	return nil
-}
-
-func buildTextRequestBody(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) ([]byte, *types.NewAPIError) {
-	if !setting.TransformerEnabled {
-		return buildTextRequestBodyLegacy(c, info, adaptor, request)
-	}
-
-	storage, err := common.GetBodyStorage(c)
-	if err != nil {
-		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-	}
-	raw, err := storage.Bytes()
-	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-	}
-
-	sourceFormat := info.RelayFormat
-	targetFormat := info.GetFinalRequestRelayFormat()
-	if sourceFormat == "" || targetFormat == "" {
-		return buildTextRequestBodyLegacy(c, info, adaptor, request)
-	}
-
-	orch := transformer.NewOrchestrator(nil, info)
-	out, _, err := orch.TransformRequest(raw, sourceFormat, targetFormat)
-	if err != nil {
-		return buildTextRequestBodyLegacy(c, info, adaptor, request)
-	}
-	if len(out) == 0 {
-		return buildTextRequestBodyLegacy(c, info, adaptor, request)
-	}
-	if info.ChannelSetting.SystemPrompt != "" && info.ChannelSetting.SystemPromptOverride {
-		common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
-	}
-	return out, nil
-}
-
-func buildTextRequestBodyLegacy(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) ([]byte, *types.NewAPIError) {
-	convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
-	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-	}
-	relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-
-	if info.ChannelSetting.SystemPrompt != "" {
-		request, ok := convertedRequest.(*dto.GeneralOpenAIRequest)
-		if ok {
-			containSystemPrompt := false
-			for _, message := range request.Messages {
-				if message.Role == request.GetSystemRoleName() {
-					containSystemPrompt = true
-					break
-				}
-			}
-			if !containSystemPrompt {
-				systemMessage := dto.Message{Role: request.GetSystemRoleName(), Content: info.ChannelSetting.SystemPrompt}
-				request.Messages = append([]dto.Message{systemMessage}, request.Messages...)
-			} else if info.ChannelSetting.SystemPromptOverride {
-				common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
-				for i, message := range request.Messages {
-					if message.Role == request.GetSystemRoleName() {
-						if message.IsStringContent() {
-							request.Messages[i].SetStringContent(info.ChannelSetting.SystemPrompt + "\n" + message.StringContent())
-						} else {
-							contents := message.ParseContent()
-							contents = append([]dto.MediaContent{{Type: dto.ContentTypeText, Text: info.ChannelSetting.SystemPrompt}}, contents...)
-							request.Messages[i].Content = contents
-						}
-						break
-					}
-				}
-			}
-		}
-	}
-
-	jsonData, err := common.Marshal(convertedRequest)
-	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())
-	}
-
-	jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-	}
-
-	if len(info.ParamOverride) > 0 {
-		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-		if err != nil {
-			return nil, newAPIErrorFromParamOverride(err)
-		}
-	}
-
-	return jsonData, nil
 }
