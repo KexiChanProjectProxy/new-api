@@ -3668,6 +3668,8 @@
     "默认折叠侧边栏": "Default collapse sidebar",
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
-    "默认补全倍率": "Default completion ratio"
+    "默认补全倍率": "Default completion ratio",
+    "转发用户 IP 到上游 XFF": "Forward User IP to Upstream XFF",
+    "开启后会将可信代理规则解析出的用户访问 IP 写入上游请求的 X-Forwarded-For，默认关闭。": "When enabled, the user access IP resolved by the trusted proxy rules will be written to the X-Forwarded-For header of upstream requests. Disabled by default."
   }
 }

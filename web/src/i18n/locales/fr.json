@@ -3637,6 +3637,8 @@
     "默认折叠侧边栏": "Réduire la barre latérale par défaut",
     "默认测试模型": "Modèle de test par défaut",
     "默认用户消息": "Bonjour",
-    "默认补全倍率": "Taux de complétion par défaut"
+    "默认补全倍率": "Taux de complétion par défaut",
+    "转发用户 IP 到上游 XFF": "Transférer l'IP utilisateur vers XFF en amont",
+    "开启后会将可信代理规则解析出的用户访问 IP 写入上游请求的 X-Forwarded-For，默认关闭。": "Lorsqu'elle est activée, l'adresse IP d'accès utilisateur résolue par les règles de proxy de confiance sera écrite dans l'en-tête X-Forwarded-For des requêtes en amont. Désactivé par défaut."
   }
 }

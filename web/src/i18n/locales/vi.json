@@ -4171,6 +4171,8 @@
     "默认折叠侧边栏": "Mặc định thu gọn thanh bên",
     "默认测试模型": "Mô hình kiểm tra mặc định",
     "默认用户消息": "Xin chào",
-    "默认补全倍率": "Tỷ lệ hoàn thành mặc định"
+    "默认补全倍率": "Tỷ lệ hoàn thành mặc định",
+    "转发用户 IP 到上游 XFF": "Chuyển tiếp IP người dùng đến XFF upstream",
+    "开启后会将可信代理规则解析出的用户访问 IP 写入上游请求的 X-Forwarded-For，默认关闭。": "Khi bật, IP truy cập của người dùng được phân giải bởi các quy tắc proxy đáng tin cậy sẽ được ghi vào tiêu đề X-Forwarded-For của các yêu cầu upstream. Mặc định tắt."
   }
 }

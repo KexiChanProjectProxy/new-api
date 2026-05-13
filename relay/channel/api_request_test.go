@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -190,4 +191,108 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+
+func TestApplyClientIPForward_DisabledByDefault(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	info := &relaycommon.RelayInfo{
+		ResolvedClientIP: "203.0.113.50",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ForwardClientIP: false,
+			},
+		},
+	}
+	applyClientIPForward(info, header)
+	require.Empty(t, header.Get("X-Forwarded-For"))
+}
+
+func TestApplyClientIPForward_EnabledInjectsResolvedIP(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	info := &relaycommon.RelayInfo{
+		ResolvedClientIP: "203.0.113.50",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ForwardClientIP: true,
+			},
+		},
+	}
+	applyClientIPForward(info, header)
+	require.Equal(t, "203.0.113.50", header.Get("X-Forwarded-For"))
+}
+
+func TestApplyClientIPForward_EnabledOverwritesExistingXFF(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2")
+	info := &relaycommon.RelayInfo{
+		ResolvedClientIP: "203.0.113.50",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ForwardClientIP: true,
+			},
+		},
+	}
+	applyClientIPForward(info, header)
+	require.Equal(t, "203.0.113.50", header.Get("X-Forwarded-For"))
+}
+
+func TestApplyClientIPForward_EnabledWithEmptyResolvedIPLeavesXFFUntouched(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2")
+	info := &relaycommon.RelayInfo{
+		ResolvedClientIP: "",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ForwardClientIP: true,
+			},
+		},
+	}
+	applyClientIPForward(info, header)
+	require.Equal(t, "10.0.0.1, 10.0.0.2", header.Get("X-Forwarded-For"))
+}
+
+func TestApplyClientIPForward_EnabledWithWhitespaceOnlyIPLeavesXFFUntouched(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	header.Set("X-Forwarded-For", "10.0.0.1")
+	info := &relaycommon.RelayInfo{
+		ResolvedClientIP: "   ",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ForwardClientIP: true,
+			},
+		},
+	}
+	applyClientIPForward(info, header)
+	require.Equal(t, "10.0.0.1", header.Get("X-Forwarded-For"))
+}
+
+func TestApplyClientIPForward_NilRelayInfoIsSafe(t *testing.T) {
+	t.Parallel()
+	header := http.Header{}
+	header.Set("X-Forwarded-For", "10.0.0.1")
+	applyClientIPForward(nil, header)
+	require.Equal(t, "10.0.0.1", header.Get("X-Forwarded-For"))
+}
+
+func TestApplyClientIPForward_WSSPathSetsXFFOnTargetHeader(t *testing.T) {
+	t.Parallel()
+	targetHeader := http.Header{}
+	targetHeader.Set("Authorization", "Bearer tok")
+	targetHeader.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2")
+	info := &relaycommon.RelayInfo{
+		ResolvedClientIP: "203.0.113.99",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ForwardClientIP: true,
+			},
+		},
+	}
+	applyClientIPForward(info, targetHeader)
+	require.Equal(t, "203.0.113.99", targetHeader.Get("X-Forwarded-For"))
+	require.Equal(t, "Bearer tok", targetHeader.Get("Authorization"))
 }
