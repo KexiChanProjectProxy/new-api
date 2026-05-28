@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  GOEXPERIMENT: greenteagc
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build default frontend
+        run: |
+          cd web/default
+          bun install
+          VITE_REACT_APP_VERSION=${{ github.ref_name }} bun run build
+
+      - name: Build classic frontend
+        run: |
+          cd web/classic
+          bun install
+          VITE_REACT_APP_VERSION=${{ github.ref_name }} bun run build
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          VERSION=${{ github.ref_name }}
+          go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=${VERSION}'" -o new-api-${{ matrix.goos }}-${{ matrix.goarch }}
+
+      - name: Upload release artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          files: new-api-${{ matrix.goos }}-${{ matrix.goarch }}
