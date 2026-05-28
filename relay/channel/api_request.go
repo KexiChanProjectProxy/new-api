@@ -43,11 +43,12 @@ func applyUpstreamContentLength(req *http.Request, info *common.RelayInfo) {
 }
 
 func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Header) {
-	if info.RelayMode == constant.RelayModeAudioTranscription || info.RelayMode == constant.RelayModeAudioTranslation {
+	switch info.RelayMode {
+	case constant.RelayModeAudioTranscription, constant.RelayModeAudioTranslation:
 		// multipart/form-data
-	} else if info.RelayMode == constant.RelayModeRealtime {
+	case constant.RelayModeRealtime:
 		// websocket
-	} else {
+	default:
 		req.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 		req.Set("Accept", c.Request.Header.Get("Accept"))
 		if info.IsStream && c.Request.Header.Get("Accept") == "" {
@@ -91,6 +92,10 @@ var passthroughSkipHeaderNamesLower = map[string]struct{}{
 	"sec-websocket-key":        {},
 	"sec-websocket-version":    {},
 	"sec-websocket-extensions": {},
+
+	// XFF/X-Real-IP: gateway controls outbound values; block inbound from passthrough.
+	"x-forwarded-for": {},
+	"x-real-ip":       {},
 }
 
 var headerPassthroughRegexCache sync.Map // map[string]*regexp.Regexp
@@ -304,6 +309,23 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+func applyClientIPForward(info *common.RelayInfo, header http.Header) {
+	if info == nil {
+		return
+	}
+	if header == nil {
+		return
+	}
+	if !info.ChannelOtherSettings.ForwardClientIP {
+		return
+	}
+	ip := strings.TrimSpace(info.ResolvedClientIP)
+	if ip == "" {
+		return
+	}
+	header.Set("X-Forwarded-For", ip)
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -327,6 +349,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	applyClientIPForward(info, req.Header)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -359,6 +382,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	applyClientIPForward(info, req.Header)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -372,6 +396,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
 	targetHeader := http.Header{}
+	upgradeReq := &http.Request{Header: targetHeader}
 	err = a.SetupRequestHeader(c, &targetHeader, info)
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
@@ -382,11 +407,10 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range headerOverride {
-		targetHeader.Set(key, value)
-	}
-	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	applyHeaderOverrideToRequest(upgradeReq, headerOverride)
+	upgradeReq.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	applyClientIPForward(info, upgradeReq.Header)
+	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, upgradeReq.Header)
 	if err != nil {
 		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
 	}
@@ -482,6 +506,9 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 }
 
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	if req != nil {
+		applyClientIPForward(info, req.Header)
+	}
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
@@ -550,6 +577,7 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	applyClientIPForward(info, req.Header)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

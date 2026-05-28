@@ -3179,6 +3179,29 @@ export function ChannelMutateDrawer({
                             </FormItem>
                           )}
                         />
+
+                        <FormField
+                          control={form.control}
+                          name='forward_client_ip'
+                          render={({ field }) => (
+                            <FormItem className='flex items-center justify-between px-4 py-3'>
+                              <div className='space-y-0.5'>
+                                <FormLabel>{t('Forward Client IP')}</FormLabel>
+                                <FormDescription>
+                                  {t(
+                                    'Write the trusted client IP resolved by proxy rules to the upstream X-Forwarded-For header.'
+                                  )}
+                                </FormDescription>
+                              </div>
+                              <FormControl>
+                                <Switch
+                                  checked={field.value}
+                                  onCheckedChange={field.onChange}
+                                />
+                              </FormControl>
+                            </FormItem>
+                          )}
+                        />
                       </div>
 
                       <FormField

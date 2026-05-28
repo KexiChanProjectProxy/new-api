@@ -36,12 +36,15 @@ func FatalLog(v ...any) {
 	os.Exit(1)
 }
 
-func LogStartupSuccess(startTime time.Time, port string) {
+func LogStartupSuccess(startTime time.Time, bindAddress string) {
 	duration := time.Since(startTime)
 	durationMs := duration.Milliseconds()
 
 	// Get network IPs
 	networkIps := GetNetworkIps()
+
+	// Parse bind address for display
+	displayHost, displayPort := FormatBindAddressForDisplay(bindAddress)
 
 	LogWriterMu.RLock()
 	defer LogWriterMu.RUnlock()
@@ -51,11 +54,23 @@ func LogStartupSuccess(startTime time.Time, port string) {
 	fmt.Fprintf(gin.DefaultWriter, "\n")
 
 	if !IsRunningInContainer() {
-		fmt.Fprintf(gin.DefaultWriter, "  ➜  \033[1mLocal:\033[0m   http://localhost:%s/\n", port)
+		// For local display, use localhost if bind is wildcard, otherwise use the actual host
+		localHost := displayHost
+		if IsAnyAddress(localHost) {
+			localHost = "localhost"
+		}
+		// Format URL correctly for IPv6 hosts (wrap in brackets)
+		var localURL string
+		if IsIPv6Host(localHost) {
+			localURL = fmt.Sprintf("http://[%s]:%s/", localHost, displayPort)
+		} else {
+			localURL = fmt.Sprintf("http://%s:%s/", localHost, displayPort)
+		}
+		fmt.Fprintf(gin.DefaultWriter, "  ➜  \033[1mLocal:\033[0m   %s\n", localURL)
 	}
 
 	for _, ip := range networkIps {
-		fmt.Fprintf(gin.DefaultWriter, "  ➜  \033[1mNetwork:\033[0m http://%s:%s/\n", ip, port)
+		fmt.Fprintf(gin.DefaultWriter, "  ➜  \033[1mNetwork:\033[0m http://%s:%s/\n", ip, displayPort)
 	}
 
 	fmt.Fprintf(gin.DefaultWriter, "\n")

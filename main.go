@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/network_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
@@ -189,22 +190,36 @@ func main() {
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 
-	// 设置路由
+
+	// Apply trusted proxy configuration before router setup
+	networkCfg := network_setting.GetNetworkSetting()
+
+	if len(networkCfg.TrustedProxies) > 0 {
+		if err := server.SetTrustedProxies(networkCfg.TrustedProxies); err != nil {
+			common.FatalLog(fmt.Sprintf("invalid trusted proxy config: %v", err))
+		}
+	} else {
+		server.SetTrustedProxies(nil)
+	}
+
+	// Set up routes
+
+	// Set up routes
 	router.SetRouter(server, router.ThemeAssets{
 		DefaultBuildFS:   buildFS,
 		DefaultIndexPage: indexPage,
 		ClassicBuildFS:   classicBuildFS,
 		ClassicIndexPage: classicIndexPage,
 	})
-	var port = os.Getenv("PORT")
-	if port == "" {
-		port = strconv.Itoa(*common.Port)
-	}
+
+	// Resolve the full bind address (precedence: custom listen address > PORT env > -port flag)
+	port := os.Getenv("PORT")
+	addr := common.MustResolveBindAddress(networkCfg.ListenAddress, port, *common.Port)
 
 	// Log startup success message
-	common.LogStartupSuccess(startTime, port)
+	common.LogStartupSuccess(startTime, addr)
 
-	err = server.Run(":" + port)
+	err = server.Run(addr)
 	if err != nil {
 		common.FatalLog("failed to start HTTP server: " + err.Error())
 	}
@@ -273,8 +288,6 @@ func InitResources() error {
 	// Initialize model settings
 	ratio_setting.InitRatioSettings()
 
-	service.InitHttpClient()
-
 	service.InitTokenEncoders()
 
 	// Initialize SQL Database
@@ -288,6 +301,12 @@ func InitResources() error {
 
 	// Initialize options, should after model.InitDB()
 	model.InitOptionMap()
+
+	err = service.InitHttpClient()
+	if err != nil {
+		common.FatalLog("failed to initialize HTTP client: " + err.Error())
+		return err
+	}
 
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
