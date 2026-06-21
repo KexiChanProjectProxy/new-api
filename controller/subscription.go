@@ -189,6 +189,15 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
+	// Validate and normalize quota windows (non-empty only; empty = legacy plan)
+	if windows := req.Plan.QuotaWindows.Slice(); len(windows) > 0 {
+		if err := model.ValidateQuotaWindows(windows); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+		windows = model.NormalizeQuotaWindows(windows)
+		req.Plan.QuotaWindows = model.NewQuotaWindowList(windows)
+	}
 	err := model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
@@ -256,6 +265,15 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
+	// Validate and normalize quota windows (non-empty only; empty = legacy plan)
+	if windows := req.Plan.QuotaWindows.Slice(); len(windows) > 0 {
+		if err := model.ValidateQuotaWindows(windows); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+		windows = model.NormalizeQuotaWindows(windows)
+		req.Plan.QuotaWindows = model.NewQuotaWindowList(windows)
+	}
 
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
@@ -277,6 +295,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"upgrade_group":              req.Plan.UpgradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
+			"quota_windows":              req.Plan.QuotaWindows,
 			"updated_at":                 common.GetTimestamp(),
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
