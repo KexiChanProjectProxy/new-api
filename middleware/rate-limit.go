@@ -108,6 +108,17 @@ func CriticalRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// RegistrationRateLimit returns a separate IP-based rate limiter for the user
+// registration endpoint. This avoids registration attempts (often behind
+// campus/corporate NAT) from competing with login, OAuth, and other critical
+// operations that use the same CriticalRateLimit budget.
+func RegistrationRateLimit() func(c *gin.Context) {
+	if common.RegistrationRateLimitEnable {
+		return rateLimitFactory(common.RegistrationRateLimitNum, common.RegistrationRateLimitDuration, "RG")
+	}
+	return defNext
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }

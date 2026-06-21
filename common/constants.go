@@ -216,6 +216,13 @@ var (
 	CriticalRateLimitNum            = 20
 	CriticalRateLimitDuration int64 = 20 * 60
 
+	// RegistrationRateLimit is an IP-based rate limiter for the user registration
+	// endpoint, separate from CriticalRateLimit so that registration attempts
+	// (often behind campus/corporate NAT) do not compete with login/OAuth/etc.
+	RegistrationRateLimitEnable   bool
+	RegistrationRateLimitNum            = 30
+	RegistrationRateLimitDuration int64 = 10 * 60
+
 	UploadRateLimitNum            = 10
 	UploadRateLimitDuration int64 = 60
 
