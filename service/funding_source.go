@@ -79,6 +79,10 @@ type SubscriptionFunding struct {
 	AmountUsedAfter int64
 	PlanId          int
 	PlanTitle       string
+	// Windowed subscription fields populated by PreConsume
+	Windowed             bool
+	CurrentConsumed      int64
+	QuotaWindowSnapshots model.QuotaWindowSnapshotList
 }
 
 func (s *SubscriptionFunding) Source() string { return BillingSourceSubscription }
@@ -93,6 +97,9 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.preConsumed = res.PreConsumed
 	s.AmountTotal = res.AmountTotal
 	s.AmountUsedAfter = res.AmountUsedAfter
+	s.Windowed = res.Windowed
+	s.CurrentConsumed = res.CurrentConsumed
+	s.QuotaWindowSnapshots = res.QuotaWindowSnapshots
 	// 获取订阅计划信息
 	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(res.UserSubscriptionId); err == nil && planInfo != nil {
 		s.PlanId = planInfo.PlanId
@@ -104,6 +111,10 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 func (s *SubscriptionFunding) Settle(delta int) error {
 	if delta == 0 {
 		return nil
+	}
+	if s.Windowed {
+		targetAmount := s.CurrentConsumed + int64(delta)
+		return model.SetSubscriptionRequestConsumedAmountTx(model.DB, s.requestId, s.subscriptionId, targetAmount, "settled_adjusted")
 	}
 	return model.PostConsumeUserSubscriptionDelta(s.subscriptionId, int64(delta))
 }

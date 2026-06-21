@@ -412,8 +412,16 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		}
 		delta := int64(quota)
 		if delta != 0 {
-			if err := model.PostConsumeUserSubscriptionDelta(relayInfo.SubscriptionId, delta); err != nil {
-				return err
+			if relayInfo.SubscriptionWindowSnapshotsJSON != "" {
+				targetAmount := relayInfo.SubscriptionWindowCurrentConsumed + delta
+				if err := model.SetSubscriptionRequestConsumedAmountTx(model.DB, relayInfo.SubscriptionRequestId, relayInfo.SubscriptionId, targetAmount, ""); err != nil {
+					return err
+				}
+				relayInfo.SubscriptionWindowCurrentConsumed = targetAmount
+			} else {
+				if err := model.PostConsumeUserSubscriptionDelta(relayInfo.SubscriptionId, delta); err != nil {
+					return err
+				}
 			}
 			relayInfo.SubscriptionPostDelta += delta
 		}
@@ -502,7 +510,65 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 		if relayInfo == nil {
 			return
 		}
-		if relayInfo.SubscriptionId == 0 || relayInfo.SubscriptionAmountTotal <= 0 {
+		if relayInfo.SubscriptionId == 0 {
+			return
+		}
+
+		// Windowed subscriptions: AmountTotal=0, legacy remaining-compute does not apply.
+		// Send a window-specific notification instead.
+		if relayInfo.SubscriptionWindowSnapshotsJSON != "" {
+			userSetting := relayInfo.UserSetting
+			threshold := common.QuotaRemindThreshold
+			if userSetting.QuotaWarningThreshold != 0 {
+				threshold = int(userSetting.QuotaWarningThreshold)
+			}
+
+			var sub model.UserSubscription
+			if err := model.DB.Where("id = ?", relayInfo.SubscriptionId).First(&sub).Error; err != nil {
+				common.SysError(fmt.Sprintf("failed to query subscription for window quota notify: %s", err.Error()))
+				return
+			}
+
+			states := sub.QuotaWindowStates.Slice()
+			now := model.GetDBTimestamp()
+			minRemaining := int64(math.MaxInt64)
+			for i := range states {
+				model.PerformLazyWindowReset(&states[i], now)
+				remaining := states[i].Quota - states[i].Used
+				if remaining < minRemaining {
+					minRemaining = remaining
+				}
+			}
+			if len(states) == 0 || minRemaining >= int64(threshold) {
+				return
+			}
+
+			prompt := "您的订阅窗口额度即将用尽"
+			notifyType := userSetting.NotifyType
+			if notifyType == "" {
+				notifyType = dto.NotifyTypeEmail
+			}
+			var content string
+			var values []interface{}
+			switch notifyType {
+			case dto.NotifyTypeBark:
+				content = "{{value}}，窗口额度 — 请查看订阅详情"
+				values = []interface{}{prompt}
+			case dto.NotifyTypeGotify:
+				content = "{{value}}，窗口额度 — 请查看订阅详情。"
+				values = []interface{}{prompt}
+			default:
+				topUpLink := PaymentReturnURL("/console/topup")
+				content = "{{value}}，窗口额度 — 请查看订阅详情。<br/>充值链接：<a href='{{value}}'>{{value}}</a>"
+				values = []interface{}{prompt, topUpLink, topUpLink}
+			}
+			if err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)); err != nil {
+				common.SysError(fmt.Sprintf("failed to send subscription window quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+			}
+			return
+		}
+
+		if relayInfo.SubscriptionAmountTotal <= 0 {
 			return
 		}
 

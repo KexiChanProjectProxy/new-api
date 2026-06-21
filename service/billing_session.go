@@ -109,8 +109,15 @@ func (s *BillingSession) Refund(c *gin.Context) {
 			common.SysLog("error refunding billing source: " + err.Error())
 		}
 		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-			if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
-				common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
+			if subFunding, ok := funding.(*SubscriptionFunding); ok && subFunding.Windowed {
+				targetAmount := subFunding.CurrentConsumed - int64(extraReserved)
+				if err := model.SetSubscriptionRequestConsumedAmountTx(model.DB, subFunding.requestId, subscriptionId, targetAmount, ""); err != nil {
+					common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
+				}
+			} else {
+				if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
+					common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
+				}
 			}
 		}
 		// 2) 退还令牌额度
@@ -238,6 +245,20 @@ func (s *BillingSession) reserveFunding(delta int) error {
 		funding.consumed += delta
 		return nil
 	case *SubscriptionFunding:
+		if funding.Windowed {
+			targetAmount := funding.CurrentConsumed + int64(delta)
+			if err := model.SetSubscriptionRequestConsumedAmountTx(model.DB, funding.requestId, funding.subscriptionId, targetAmount, ""); err != nil {
+				return types.NewErrorWithStatusCode(
+					fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
+					types.ErrorCodeInsufficientUserQuota,
+					http.StatusForbidden,
+					types.ErrOptionWithSkipRetry(),
+					types.ErrOptionWithNoRecordErrorLog(),
+				)
+			}
+			funding.CurrentConsumed = targetAmount
+			return nil
+		}
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
 			return types.NewErrorWithStatusCode(
 				fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
@@ -262,8 +283,17 @@ func (s *BillingSession) rollbackFundingReserve(delta int) {
 			funding.consumed -= delta
 		}
 	case *SubscriptionFunding:
-		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
-			common.SysLog("error rolling back subscription funding reserve: " + err.Error())
+		if funding.Windowed {
+			targetAmount := funding.CurrentConsumed - int64(delta)
+			if err := model.SetSubscriptionRequestConsumedAmountTx(model.DB, funding.requestId, funding.subscriptionId, targetAmount, ""); err != nil {
+				common.SysLog("error rolling back subscription funding reserve: " + err.Error())
+			} else {
+				funding.CurrentConsumed = targetAmount
+			}
+		} else {
+			if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
+				common.SysLog("error rolling back subscription funding reserve: " + err.Error())
+			}
 		}
 	}
 }
@@ -328,6 +358,18 @@ func (s *BillingSession) syncRelayInfo() {
 		info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter + int64(s.extraReserved)
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
+		info.SubscriptionRequestId = sub.requestId
+		info.SubscriptionWindowCurrentConsumed = sub.CurrentConsumed + int64(s.extraReserved)
+		if sub.Windowed && sub.QuotaWindowSnapshots.Slice() != nil {
+			snapJSON, err := sub.QuotaWindowSnapshots.Value()
+			if err == nil {
+				if b, ok := snapJSON.([]byte); ok {
+					info.SubscriptionWindowSnapshotsJSON = string(b)
+				} else if s, ok := snapJSON.(string); ok {
+					info.SubscriptionWindowSnapshotsJSON = s
+				}
+			}
+		}
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
