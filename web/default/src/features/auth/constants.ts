@@ -16,66 +16,69 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { z } from 'zod'
+import { z } from "zod";
 
 // ============================================================================
 // Form Schemas
 // ============================================================================
 
 export const loginFormSchema = z.object({
-  username: z.string().min(1, 'Please enter your username or email'),
-  password: z
-    .string()
-    .min(1, 'Please enter your password')
-    .min(8, 'Password must be at least 8 characters long'),
-})
+	username: z.string().min(1, "Please enter your username or email"),
+	password: z
+		.string()
+		.min(1, "Please enter your password")
+		.min(8, "Password must be at least 8 characters long"),
+});
 
 export const registerFormSchema = z
-  .object({
-    username: z.string().min(1, 'Please enter your username'),
-    email: z.string().optional(),
-    password: z
-      .string()
-      .min(1, 'Please enter your password')
-      .min(8, 'Password must be at least 8 characters long')
-      .max(20, 'Password must be at most 20 characters long'),
-    confirmPassword: z.string().min(1, 'Please confirm your password'),
-  })
-  .refine((data) => data.password === data.confirmPassword, {
-    message: "Passwords don't match.",
-    path: ['confirmPassword'],
-  })
+	.object({
+		username: z
+			.string()
+			.min(1, "Please enter your username")
+			.max(50, "Username must be at most 50 characters long"),
+		email: z.string().optional(),
+		password: z
+			.string()
+			.min(1, "Please enter your password")
+			.min(8, "Password must be at least 8 characters long")
+			.max(20, "Password must be at most 20 characters long"),
+		confirmPassword: z.string().min(1, "Please confirm your password"),
+	})
+	.refine((data) => data.password === data.confirmPassword, {
+		message: "Passwords don't match.",
+		path: ["confirmPassword"],
+	});
 
 export const forgotPasswordFormSchema = z.object({
-  email: z.string().email({
-    message: 'Please enter a valid email address',
-  }),
-})
+	email: z.string().email({
+		message: "Please enter a valid email address",
+	}),
+});
 
 export const otpFormSchema = z.object({
-  otp: z.string().min(1, 'Please enter a code.'),
-})
+	otp: z.string().min(1, "Please enter a code."),
+});
 
 // ============================================================================
 // Validation Constants
 // ============================================================================
 
-export const PASSWORD_MIN_LENGTH = 8
-export const PASSWORD_MAX_LENGTH = 20
-export const OTP_LENGTH = 6
-export const BACKUP_CODE_LENGTH = 9 // XXXX-XXXX format
-export const BACKUP_CODE_REGEX = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/i
-export const OTP_REGEX = /^\d{6}$/
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 20;
+export const OTP_LENGTH = 6;
+export const BACKUP_CODE_LENGTH = 9; // XXXX-XXXX format
+export const BACKUP_CODE_REGEX = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/i;
+export const OTP_REGEX = /^\d{6}$/;
 
 // ============================================================================
 // Countdown Constants
 // ============================================================================
 
-export const EMAIL_VERIFICATION_COUNTDOWN = 30 // seconds
-export const PASSWORD_RESET_COUNTDOWN = 30 // seconds
+export const EMAIL_VERIFICATION_COUNTDOWN = 30; // seconds
+export const PASSWORD_RESET_COUNTDOWN = 30; // seconds
 
 // ============================================================================
 // OAuth Constants
 // ============================================================================
 
-export const OAUTH_BIND_STORAGE_KEY = 'oauth:binding:result'
+export const OAUTH_BIND_STORAGE_KEY = "oauth:binding:result";
