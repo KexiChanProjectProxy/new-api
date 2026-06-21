@@ -105,6 +105,11 @@ type TaskPrivateData struct {
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
 	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	// Subscription window fields for request-aware adjustment when pre-consume record is cleaned up
+	SubscriptionRequestId              string                  `json:"subscription_request_id,omitempty"`
+	SubscriptionWindowSnapshots        QuotaWindowSnapshotList `json:"subscription_window_snapshots,omitempty"`
+	SubscriptionWindowAppliedAmount    int64                   `json:"subscription_window_applied_amount,omitempty"`
+	SubscriptionWindowAdjustmentMarker string                  `json:"subscription_window_adjustment_marker,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -150,7 +155,7 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
-	if (p == TaskPrivateData{}) {
+	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" && p.BillingSource == "" && p.SubscriptionId == 0 && p.TokenId == 0 && p.BillingContext == nil && p.SubscriptionRequestId == "" && p.SubscriptionWindowAppliedAmount == 0 && p.SubscriptionWindowAdjustmentMarker == "" {
 		return nil, nil
 	}
 	return common.Marshal(p)

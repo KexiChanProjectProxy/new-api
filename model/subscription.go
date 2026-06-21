@@ -1,8 +1,10 @@
 package model
 
 import (
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,8 +36,9 @@ const (
 )
 
 var (
-	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
-	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
+	ErrSubscriptionOrderNotFound              = errors.New("subscription order not found")
+	ErrSubscriptionOrderStatusInvalid         = errors.New("subscription order status invalid")
+	ErrSubscriptionWindowExpiredForAdjustment = errors.New("subscription window expired for positive adjustment")
 )
 
 const (
@@ -177,6 +180,9 @@ type SubscriptionPlan struct {
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
 
+	// Multi-window quota configuration (empty = single-window legacy mode)
+	QuotaWindows QuotaWindowList `json:"quota_windows" gorm:"type:text"`
+
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
@@ -249,6 +255,10 @@ type UserSubscription struct {
 
 	LastResetTime int64 `json:"last_reset_time" gorm:"type:bigint;default:0"`
 	NextResetTime int64 `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
+
+	// Multi-window quota state (mirrors plan's quota_windows with per-window used tracking)
+	QuotaWindows      QuotaWindowList      `json:"quota_windows" gorm:"type:text"`
+	QuotaWindowStates QuotaWindowStateList `json:"quota_window_states" gorm:"type:text"`
 
 	UpgradeGroup  string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 	PrevUserGroup string `json:"prev_user_group" gorm:"type:varchar(64);default:''"`
@@ -500,6 +510,25 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		PrevUserGroup: prevGroup,
 		CreatedAt:     common.GetTimestamp(),
 		UpdatedAt:     common.GetTimestamp(),
+	}
+	// Snapshot quota windows from plan into subscription (multi-window mode)
+	if planWindows := plan.QuotaWindows.Slice(); len(planWindows) > 0 {
+		sub.QuotaWindows = plan.QuotaWindows
+		states := make([]QuotaWindowState, len(planWindows))
+		for i, w := range planWindows {
+			states[i] = QuotaWindowState{
+				Name:            w.Name,
+				DurationSeconds: w.DurationSeconds,
+				Quota:           w.Quota,
+				Used:            0,
+				WindowStart:     0,
+			}
+		}
+		sub.QuotaWindowStates = NewQuotaWindowStateList(states)
+		sub.AmountTotal = 0
+		sub.AmountUsed = 0
+		sub.LastResetTime = 0
+		sub.NextResetTime = 0
 	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
@@ -820,6 +849,15 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 	result := make([]SubscriptionSummary, 0, len(subs))
 	for _, sub := range subs {
 		subCopy := sub
+		// Normalize malformed window data: if Scan encountered bad JSON,
+		// replace with empty valid lists so the API never crashes or returns
+		// escaped string artifacts.
+		if subCopy.QuotaWindows.IsInvalid() {
+			subCopy.QuotaWindows = NewQuotaWindowList(nil)
+		}
+		if subCopy.QuotaWindowStates.IsInvalid() {
+			subCopy.QuotaWindowStates = NewQuotaWindowStateList(nil)
+		}
 		result = append(result, SubscriptionSummary{
 			Subscription: &subCopy,
 		})
@@ -914,14 +952,19 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 }
 
 type SubscriptionPreConsumeResult struct {
-	UserSubscriptionId int
-	PreConsumed        int64
-	AmountTotal        int64
-	AmountUsedBefore   int64
-	AmountUsedAfter    int64
+	UserSubscriptionId   int
+	PreConsumed          int64
+	AmountTotal          int64
+	AmountUsedBefore     int64
+	AmountUsedAfter      int64
+	Windowed             bool
+	CurrentConsumed      int64
+	QuotaWindowSnapshots QuotaWindowSnapshotList
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
+// This applies to ALL active subscriptions (both legacy and windowed) — expiry is
+// independent of quota mode.
 func ExpireDueSubscriptions(limit int) (int, error) {
 	if limit <= 0 {
 		limit = 200
@@ -1016,8 +1059,14 @@ type SubscriptionPreConsumeRecord struct {
 	UserSubscriptionId int    `json:"user_subscription_id" gorm:"index"`
 	PreConsumed        int64  `json:"pre_consumed" gorm:"type:bigint;not null;default:0"`
 	Status             string `json:"status" gorm:"type:varchar(32);index"` // consumed/refunded
-	CreatedAt          int64  `json:"created_at" gorm:"bigint"`
-	UpdatedAt          int64  `json:"updated_at" gorm:"bigint;index"`
+
+	// Quota window snapshots at pre-consume time + accounting columns
+	QuotaWindowSnapshots QuotaWindowSnapshotList `json:"quota_window_snapshots" gorm:"type:text"`
+	CurrentConsumed      int64                   `json:"current_consumed" gorm:"type:bigint;not null;default:0"`
+	FinalConsumed        int64                   `json:"final_consumed" gorm:"type:bigint;not null;default:0"`
+
+	CreatedAt int64 `json:"created_at" gorm:"bigint"`
+	UpdatedAt int64 `json:"updated_at" gorm:"bigint;index"`
 }
 
 func (r *SubscriptionPreConsumeRecord) BeforeCreate(tx *gorm.DB) error {
@@ -1035,6 +1084,11 @@ func (r *SubscriptionPreConsumeRecord) BeforeUpdate(tx *gorm.DB) error {
 func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64) error {
 	if tx == nil || sub == nil || plan == nil {
 		return errors.New("invalid reset args")
+	}
+	// Windowed subscriptions reset lazily at pre-consume time (PerformLazyWindowReset).
+	// They always have next_reset_time=0, but guard here against any edge case.
+	if len(sub.QuotaWindows.Slice()) > 0 {
+		return nil
 	}
 	if sub.NextResetTime > 0 && sub.NextResetTime > now {
 		return nil
@@ -1069,6 +1123,9 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 }
 
 // PreConsumeUserSubscription pre-consumes from any active subscription total quota.
+// For windowed subscriptions (QuotaWindows non-empty): applies lazy window reset,
+// checks ALL windows accommodate the amount, then increments each window's used counter.
+// For legacy subscriptions (QuotaWindows empty): follows the original AmountTotal/AmountUsed path.
 func PreConsumeUserSubscription(requestId string, userId int, modelName string, quotaType int, amount int64) (*SubscriptionPreConsumeResult, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
@@ -1085,7 +1142,8 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var existing SubscriptionPreConsumeRecord
-		query := tx.Where("request_id = ?", requestId).Limit(1).Find(&existing)
+		query := tx.Set("gorm:query_option", "FOR UPDATE").
+			Where("request_id = ?", requestId).Limit(1).Find(&existing)
 		if query.Error != nil {
 			return query.Error
 		}
@@ -1099,9 +1157,15 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			}
 			returnValue.UserSubscriptionId = sub.Id
 			returnValue.PreConsumed = existing.PreConsumed
-			returnValue.AmountTotal = sub.AmountTotal
-			returnValue.AmountUsedBefore = sub.AmountUsed
-			returnValue.AmountUsedAfter = sub.AmountUsed
+			if sub.QuotaWindows.Slice() != nil && len(sub.QuotaWindows.Slice()) > 0 {
+				returnValue.Windowed = true
+				returnValue.CurrentConsumed = existing.CurrentConsumed
+				returnValue.QuotaWindowSnapshots = existing.QuotaWindowSnapshots
+			} else {
+				returnValue.AmountTotal = sub.AmountTotal
+				returnValue.AmountUsedBefore = sub.AmountUsed
+				returnValue.AmountUsedAfter = sub.AmountUsed
+			}
 			return nil
 		}
 
@@ -1115,28 +1179,110 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
+
 		for _, candidate := range subs {
 			sub := candidate
-			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
-			if err != nil {
+			windows := sub.QuotaWindows.Slice()
+			isWindowed := len(windows) > 0
+
+			if !isWindowed {
+				plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+				if err != nil {
+					return err
+				}
+				if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
+					return err
+				}
+				usedBefore := sub.AmountUsed
+				if sub.AmountTotal > 0 {
+					remain := sub.AmountTotal - usedBefore
+					if remain < amount {
+						continue
+					}
+				}
+				record := &SubscriptionPreConsumeRecord{
+					RequestId:          requestId,
+					UserId:             userId,
+					UserSubscriptionId: sub.Id,
+					PreConsumed:        amount,
+					Status:             "consumed",
+					CurrentConsumed:    amount,
+				}
+				if err := tx.Create(record).Error; err != nil {
+					var dup SubscriptionPreConsumeRecord
+					if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
+						if dup.Status == "refunded" {
+							return errors.New("subscription pre-consume already refunded")
+						}
+						returnValue.UserSubscriptionId = sub.Id
+						returnValue.PreConsumed = dup.PreConsumed
+						returnValue.CurrentConsumed = dup.CurrentConsumed
+						returnValue.AmountTotal = sub.AmountTotal
+						returnValue.AmountUsedBefore = sub.AmountUsed
+						returnValue.AmountUsedAfter = sub.AmountUsed
+						return nil
+					}
+					return err
+				}
+				sub.AmountUsed += amount
+				if err := tx.Save(&sub).Error; err != nil {
+					return err
+				}
+				returnValue.UserSubscriptionId = sub.Id
+				returnValue.PreConsumed = amount
+				returnValue.CurrentConsumed = amount
+				returnValue.AmountTotal = sub.AmountTotal
+				returnValue.AmountUsedBefore = usedBefore
+				returnValue.AmountUsedAfter = sub.AmountUsed
+				return nil
+			}
+
+			// --- Windowed path ---
+			states := sub.QuotaWindowStates.Slice()
+
+			// If state count doesn't match window count, use states as-is (they're authoritative).
+			// A mismatch can occur when an admin edits the plan after subscription creation.
+			// The states track actual runtime consumption.
+
+			for i := range states {
+				PerformLazyWindowReset(&states[i], now)
+			}
+
+			if err := ValidateQuotaWindowUsedOverflow(states, amount); err != nil {
 				return err
 			}
-			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
-				return err
-			}
-			usedBefore := sub.AmountUsed
-			if sub.AmountTotal > 0 {
-				remain := sub.AmountTotal - usedBefore
-				if remain < amount {
-					continue
+
+			// Check ALL windows: each must have quota - used >= amount
+			allSufficient := true
+			for _, s := range states {
+				if s.Quota-s.Used < amount {
+					allSufficient = false
+					break
 				}
 			}
+			if !allSufficient {
+				continue // try next subscription
+			}
+
+			snapshots := make([]QuotaWindowSnapshot, len(states))
+			for i, s := range states {
+				snapshots[i] = QuotaWindowSnapshot{
+					Name:            s.Name,
+					DurationSeconds: s.DurationSeconds,
+					WindowStart:     s.WindowStart,
+					Amount:          amount,
+				}
+			}
+
 			record := &SubscriptionPreConsumeRecord{
-				RequestId:          requestId,
-				UserId:             userId,
-				UserSubscriptionId: sub.Id,
-				PreConsumed:        amount,
-				Status:             "consumed",
+				RequestId:            requestId,
+				UserId:               userId,
+				UserSubscriptionId:   sub.Id,
+				PreConsumed:          amount,
+				Status:               "consumed",
+				QuotaWindowSnapshots: NewQuotaWindowSnapshotList(snapshots),
+				CurrentConsumed:      amount,
+				FinalConsumed:        0,
 			}
 			if err := tx.Create(record).Error; err != nil {
 				var dup SubscriptionPreConsumeRecord
@@ -1146,22 +1292,30 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 					}
 					returnValue.UserSubscriptionId = sub.Id
 					returnValue.PreConsumed = dup.PreConsumed
-					returnValue.AmountTotal = sub.AmountTotal
-					returnValue.AmountUsedBefore = sub.AmountUsed
-					returnValue.AmountUsedAfter = sub.AmountUsed
+					returnValue.Windowed = true
+					returnValue.CurrentConsumed = dup.CurrentConsumed
+					returnValue.QuotaWindowSnapshots = dup.QuotaWindowSnapshots
 					return nil
 				}
 				return err
 			}
-			sub.AmountUsed += amount
-			if err := tx.Save(&sub).Error; err != nil {
+
+			for i := range states {
+				states[i].Used += amount
+			}
+			sub.QuotaWindowStates = NewQuotaWindowStateList(states)
+
+			if err := tx.Model(&sub).Updates(map[string]interface{}{
+				"quota_window_states": sub.QuotaWindowStates,
+			}).Error; err != nil {
 				return err
 			}
+
 			returnValue.UserSubscriptionId = sub.Id
 			returnValue.PreConsumed = amount
-			returnValue.AmountTotal = sub.AmountTotal
-			returnValue.AmountUsedBefore = usedBefore
-			returnValue.AmountUsedAfter = sub.AmountUsed
+			returnValue.Windowed = true
+			returnValue.CurrentConsumed = amount
+			returnValue.QuotaWindowSnapshots = NewQuotaWindowSnapshotList(snapshots)
 			return nil
 		}
 		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
@@ -1172,7 +1326,6 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 	return returnValue, nil
 }
 
-// RefundSubscriptionPreConsume is idempotent and refunds pre-consumed subscription quota by requestId.
 func RefundSubscriptionPreConsume(requestId string) error {
 	if strings.TrimSpace(requestId) == "" {
 		return errors.New("requestId is empty")
@@ -1190,15 +1343,278 @@ func RefundSubscriptionPreConsume(requestId string) error {
 			record.Status = "refunded"
 			return tx.Save(&record).Error
 		}
-		if err := PostConsumeUserSubscriptionDelta(record.UserSubscriptionId, -record.PreConsumed); err != nil {
+
+		var sub UserSubscription
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").
+			Where("id = ?", record.UserSubscriptionId).First(&sub).Error; err != nil {
 			return err
 		}
+
+		windows := sub.QuotaWindows.Slice()
+		isWindowed := len(windows) > 0
+
+		if isWindowed {
+			states := sub.QuotaWindowStates.Slice()
+			for i := range states {
+				states[i].Used -= record.CurrentConsumed
+				// Clamping Used to 0 is safe: idempotency (each request_id can only be refunded
+				// once) and FOR UPDATE locks prevent concurrent manipulation. Used=0 means
+				// "no quota consumed from this window yet," which is correct after a full refund.
+				if states[i].Used < 0 {
+					states[i].Used = 0
+				}
+			}
+			sub.QuotaWindowStates = NewQuotaWindowStateList(states)
+			if err := tx.Model(&sub).Updates(map[string]interface{}{
+				"quota_window_states": sub.QuotaWindowStates,
+			}).Error; err != nil {
+				return err
+			}
+		} else {
+			// Legacy path: use tx directly (not PostConsumeUserSubscriptionDelta which opens
+			// its own transaction, creating a nested transaction that can commit independently
+			// if the outer transaction later fails).
+			var legacySub UserSubscription
+			if err := tx.Set("gorm:query_option", "FOR UPDATE").
+				Where("id = ?", record.UserSubscriptionId).First(&legacySub).Error; err != nil {
+				return err
+			}
+			newUsed := legacySub.AmountUsed - record.PreConsumed
+			if newUsed < 0 {
+				newUsed = 0
+			}
+			legacySub.AmountUsed = newUsed
+			if err := tx.Save(&legacySub).Error; err != nil {
+				return err
+			}
+		}
+
 		record.Status = "refunded"
 		return tx.Save(&record).Error
 	})
 }
 
+// SetSubscriptionRequestConsumedAmountTx is a target-based, request-aware helper for windowed
+// subscription accounting. It locks the pre-consume record and subscription, computes
+// delta = targetAmount - record.CurrentConsumed, and applies that exact difference only to
+// window states whose name and window_start match the record's QuotaWindowSnapshots.
+// Repeated calls with the same target are idempotent.
+// For legacy (non-windowed) subscriptions, it calls PostConsumeUserSubscriptionDelta directly.
+func SetSubscriptionRequestConsumedAmountTx(tx *gorm.DB, requestId string, subscriptionId int, targetAmount int64, finalStatus string) error {
+	if strings.TrimSpace(requestId) == "" {
+		return errors.New("requestId is empty")
+	}
+
+	return tx.Transaction(func(innerTx *gorm.DB) error {
+		// 1. Lock the pre-consume record
+		var record SubscriptionPreConsumeRecord
+		if err := innerTx.Set("gorm:query_option", "FOR UPDATE").
+			Where("request_id = ?", requestId).First(&record).Error; err != nil {
+			return err
+		}
+
+		// Idempotent: if already at target with matching status, skip
+		if record.CurrentConsumed == targetAmount && (finalStatus == "" || record.Status == finalStatus) {
+			return nil
+		}
+
+		// If record is already refunded, no adjustment allowed
+		if record.Status == "refunded" {
+			return errors.New("cannot adjust a refunded pre-consume record")
+		}
+
+		snapshots := record.QuotaWindowSnapshots.Slice()
+		isWindowed := len(snapshots) > 0
+
+		if !isWindowed {
+			delta := targetAmount - record.CurrentConsumed
+			if delta != 0 {
+				var legacySub UserSubscription
+				if err := innerTx.Set("gorm:query_option", "FOR UPDATE").
+					Where("id = ?", subscriptionId).First(&legacySub).Error; err != nil {
+					return err
+				}
+				newUsed := legacySub.AmountUsed + delta
+				if newUsed < 0 {
+					newUsed = 0
+				}
+				legacySub.AmountUsed = newUsed
+				if err := innerTx.Save(&legacySub).Error; err != nil {
+					return err
+				}
+			}
+			record.CurrentConsumed = targetAmount
+			if finalStatus != "" {
+				record.FinalConsumed = targetAmount
+				record.Status = finalStatus
+			}
+			return innerTx.Save(&record).Error
+		}
+
+		// --- Windowed path ---
+		var sub UserSubscription
+		if err := innerTx.Set("gorm:query_option", "FOR UPDATE").
+			Where("id = ?", subscriptionId).First(&sub).Error; err != nil {
+			return err
+		}
+
+		delta := targetAmount - record.CurrentConsumed
+		if delta == 0 {
+			if finalStatus != "" {
+				record.FinalConsumed = targetAmount
+				record.Status = finalStatus
+				return innerTx.Save(&record).Error
+			}
+			return nil
+		}
+
+		states := sub.QuotaWindowStates.Slice()
+
+		appliedAny := false
+		for _, snap := range snapshots {
+			matched := false
+			for i := range states {
+				if states[i].Name == snap.Name && states[i].WindowStart == snap.WindowStart {
+					states[i].Used += delta
+					// Clamping Used to 0 on negative delta is safe: idempotency (each request_id
+					// is settled once) and FOR UPDATE locks prevent concurrent manipulation.
+					// Used=0 means "no quota consumed from this window yet," correct after a
+					// full refund. Repeated preconsume→partial-settle cannot extract free quota
+					// because each preconsume creates a unique request_id and increments Used,
+					// while settle only adjusts by delta = targetAmount - CurrentConsumed.
+					if states[i].Used < 0 {
+						states[i].Used = 0
+					}
+					// Guard against exceeding window quota: the preconsume already checked
+					// that all windows had capacity, but adjustments (e.g., violation fees)
+					// applied via PostConsumeQuota can push Used above Quota. Reject if so.
+					if states[i].Used > states[i].Quota {
+						// Revert the increment
+						states[i].Used -= delta
+						return fmt.Errorf("subscription window[%s] quota exceeded: used=%d quota=%d", states[i].Name, states[i].Used, states[i].Quota)
+					}
+					matched = true
+					appliedAny = true
+					break
+				}
+			}
+			if !matched && delta > 0 {
+				return ErrSubscriptionWindowExpiredForAdjustment
+			}
+			// Negative delta after window reset: safe no-op
+		}
+
+		if appliedAny {
+			sub.QuotaWindowStates = NewQuotaWindowStateList(states)
+			if err := innerTx.Model(&sub).Updates(map[string]interface{}{
+				"quota_window_states": sub.QuotaWindowStates,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Update record
+		record.CurrentConsumed = targetAmount
+		if finalStatus != "" {
+			record.FinalConsumed = targetAmount
+			record.Status = finalStatus
+		}
+		return innerTx.Save(&record).Error
+	})
+}
+
+// SetTaskSubscriptionWindowAmountTx adjusts subscription window used amounts using task snapshot
+// data as a fallback when the SubscriptionPreConsumeRecord has been cleaned up.
+// It is idempotent: repeated calls with the same targetAmount are no-ops.
+func SetTaskSubscriptionWindowAmountTx(tx *gorm.DB, task *Task, targetAmount int64) error {
+	if task == nil || task.PrivateData.SubscriptionId <= 0 {
+		return nil
+	}
+
+	marker := task.PrivateData.SubscriptionWindowAdjustmentMarker
+	if marker != "" && marker == fmt.Sprintf("%d:%d", task.ID, targetAmount) {
+		return nil
+	}
+
+	snapshots := task.PrivateData.SubscriptionWindowSnapshots.Slice()
+	isWindowed := len(snapshots) > 0
+
+	delta := targetAmount - task.PrivateData.SubscriptionWindowAppliedAmount
+
+	if !isWindowed {
+		if delta != 0 {
+			return tx.Transaction(func(innerTx *gorm.DB) error {
+				var sub UserSubscription
+				if err := innerTx.Set("gorm:query_option", "FOR UPDATE").
+					Where("id = ?", task.PrivateData.SubscriptionId).First(&sub).Error; err != nil {
+					return err
+				}
+				newUsed := sub.AmountUsed + delta
+				if newUsed < 0 {
+					newUsed = 0
+				}
+				sub.AmountUsed = newUsed
+				if err := innerTx.Save(&sub).Error; err != nil {
+					return err
+				}
+				task.PrivateData.SubscriptionWindowAppliedAmount = targetAmount
+				task.PrivateData.SubscriptionWindowAdjustmentMarker = fmt.Sprintf("%d:%d", task.ID, targetAmount)
+				return nil
+			})
+		}
+		task.PrivateData.SubscriptionWindowAppliedAmount = targetAmount
+		task.PrivateData.SubscriptionWindowAdjustmentMarker = fmt.Sprintf("%d:%d", task.ID, targetAmount)
+		return nil
+	}
+
+	// Windowed path: lock subscription, match snapshots to states
+	return tx.Transaction(func(innerTx *gorm.DB) error {
+		var sub UserSubscription
+		if err := innerTx.Set("gorm:query_option", "FOR UPDATE").
+			Where("id = ?", task.PrivateData.SubscriptionId).First(&sub).Error; err != nil {
+			return err
+		}
+
+		if delta == 0 {
+			task.PrivateData.SubscriptionWindowAdjustmentMarker = fmt.Sprintf("%d:%d", task.ID, targetAmount)
+			return nil
+		}
+
+		states := sub.QuotaWindowStates.Slice()
+		appliedAny := false
+		for _, snap := range snapshots {
+			for i := range states {
+				if states[i].Name == snap.Name && states[i].WindowStart == snap.WindowStart {
+					states[i].Used += delta
+					// Clamping Used to 0 on negative delta is safe (see
+					// SetSubscriptionRequestConsumedAmountTx for rationale).
+					if states[i].Used < 0 {
+						states[i].Used = 0
+					}
+					appliedAny = true
+					break
+				}
+			}
+		}
+
+		if appliedAny {
+			sub.QuotaWindowStates = NewQuotaWindowStateList(states)
+			if err := innerTx.Model(&sub).Updates(map[string]interface{}{
+				"quota_window_states": sub.QuotaWindowStates,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		task.PrivateData.SubscriptionWindowAppliedAmount = targetAmount
+		task.PrivateData.SubscriptionWindowAdjustmentMarker = fmt.Sprintf("%d:%d", task.ID, targetAmount)
+		return nil
+	})
+}
+
 // ResetDueSubscriptions resets subscriptions whose next_reset_time has passed.
+// Windowed subscriptions (QuotaWindows non-empty) always have next_reset_time=0,
+// so the WHERE clause naturally excludes them — no separate filter needed.
 func ResetDueSubscriptions(limit int) (int, error) {
 	if limit <= 0 {
 		limit = 200
@@ -1305,4 +1721,471 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 		sub.AmountUsed = newUsed
 		return tx.Save(&sub).Error
 	})
+}
+
+// ChargeViolationFeeOnSubscription charges a violation fee directly on the subscription state.
+// For windowed subscriptions, the fee is added to each window's Used equally (matching how
+// PreConsumeUserSubscription tracks consumption per window).
+// For legacy subscriptions, it increments AmountUsed.
+// This does NOT touch any SubscriptionPreConsumeRecord's CurrentConsumed — the fee is a penalty
+// that should NOT be refundable by RefundSubscriptionPreConsume (which operates on CurrentConsumed).
+// It also does NOT check quota availability (the fee is a penalty, not consumption).
+func ChargeViolationFeeOnSubscription(subscriptionId int, feeQuota int64) error {
+	if subscriptionId <= 0 || feeQuota <= 0 {
+		return errors.New("invalid args")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return ChargeViolationFeeOnSubscriptionTx(tx, subscriptionId, feeQuota)
+	})
+}
+
+// ChargeViolationFeeOnSubscriptionTx applies the subscription-side adjustment for a violation fee
+// within an existing transaction. Positive feeQuota = charge, negative feeQuota = reverse.
+// Unlike ChargeViolationFeeOnSubscription, this does NOT validate feeQuota > 0 — it accepts
+// negative values so callers can reverse a charge by passing -feeQuota.
+func ChargeViolationFeeOnSubscriptionTx(tx *gorm.DB, subscriptionId int, feeQuota int64) error {
+	if subscriptionId <= 0 {
+		return errors.New("invalid subscriptionId")
+	}
+	var sub UserSubscription
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").
+		Where("id = ?", subscriptionId).First(&sub).Error; err != nil {
+		return err
+	}
+	subWindows := sub.QuotaWindows.Slice()
+	if len(subWindows) > 0 {
+		states := sub.QuotaWindowStates.Slice()
+		if len(states) == 0 {
+			return errors.New("subscription has quota windows but no window states")
+		}
+		for i := range states {
+			states[i].Used += feeQuota
+		}
+		sub.QuotaWindowStates = NewQuotaWindowStateList(states)
+		if err := tx.Model(&sub).Updates(map[string]interface{}{
+			"quota_window_states": sub.QuotaWindowStates,
+		}).Error; err != nil {
+			return err
+		}
+	} else {
+		sub.AmountUsed += feeQuota
+		if err := tx.Save(&sub).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReverseViolationFeeOnSubscription reverses a previous violation fee charge on the subscription.
+// It decrements window Used or AmountUsed by feeQuota. This is used when the token deduction
+// fails after the subscription was already charged (to prevent accounting inconsistency).
+func ReverseViolationFeeOnSubscription(subscriptionId int, feeQuota int64) error {
+	if subscriptionId <= 0 || feeQuota <= 0 {
+		return errors.New("invalid args")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return ChargeViolationFeeOnSubscriptionTx(tx, subscriptionId, -feeQuota)
+	})
+}
+
+// ============================================================================
+// Quota Window Types — Multi-window quota tracking for subscriptions
+// ============================================================================
+
+// MaxSubscriptionQuotaWindows is the maximum number of quota windows allowed per subscription.
+const MaxSubscriptionQuotaWindows = 8
+
+// QuotaWindow defines a named quota window within a subscription plan.
+// Duration is in seconds. Common durations:
+//   - 5H  = 5 * 3600 = 18000
+//   - 7D  = 7 * 86400 = 604800
+//   - 1M  = 30 * 86400 = 2592000
+type QuotaWindow struct {
+	Name            string `json:"name"`
+	DurationSeconds int64  `json:"duration_seconds"`
+	Quota           int64  `json:"quota"`
+}
+
+// QuotaWindowState tracks the runtime state of a single quota window for a user subscription.
+// WindowStart == 0 means the window has never been used; first consumption sets it to now.
+type QuotaWindowState struct {
+	Name            string `json:"name"`
+	DurationSeconds int64  `json:"duration_seconds"`
+	Quota           int64  `json:"quota"`
+	Used            int64  `json:"used"`
+	WindowStart     int64  `json:"window_start"`
+}
+
+// QuotaWindowSnapshot records a single consumption event within a quota window.
+type QuotaWindowSnapshot struct {
+	Name            string `json:"name"`
+	DurationSeconds int64  `json:"duration_seconds"`
+	WindowStart     int64  `json:"window_start"`
+	Amount          int64  `json:"amount"`
+}
+
+// --- Custom list types with sql.Scanner / driver.Valuer ---
+
+// QuotaWindowList is a custom slice type that implements sql.Scanner and driver.Valuer
+// for GORM TEXT column storage as JSON arrays.
+type QuotaWindowList struct {
+	windows []QuotaWindow
+	invalid bool // set when Scan receives malformed JSON; display-tolerant
+}
+
+// NewQuotaWindowList creates a QuotaWindowList from a slice.
+func NewQuotaWindowList(windows []QuotaWindow) QuotaWindowList {
+	if windows == nil {
+		windows = []QuotaWindow{}
+	}
+	return QuotaWindowList{windows: windows}
+}
+
+// Slice returns the underlying slice. Never nil.
+func (l QuotaWindowList) Slice() []QuotaWindow {
+	if l.windows == nil {
+		return []QuotaWindow{}
+	}
+	return l.windows
+}
+
+// IsInvalid reports whether the list was loaded from malformed JSON data.
+func (l QuotaWindowList) IsInvalid() bool {
+	return l.invalid
+}
+
+// Scan implements sql.Scanner. Display-tolerant: malformed JSON → empty list, no error.
+func (l *QuotaWindowList) Scan(value interface{}) error {
+	l.invalid = false
+	if value == nil {
+		l.windows = []QuotaWindow{}
+		return nil
+	}
+	var bytesValue []byte
+	switch v := value.(type) {
+	case []byte:
+		bytesValue = v
+	case string:
+		bytesValue = []byte(v)
+	default:
+		l.windows = []QuotaWindow{}
+		l.invalid = true
+		return nil
+	}
+	if len(bytesValue) == 0 {
+		l.windows = []QuotaWindow{}
+		return nil
+	}
+	var result []QuotaWindow
+	if err := common.Unmarshal(bytesValue, &result); err != nil {
+		l.windows = []QuotaWindow{}
+		l.invalid = true
+		return nil
+	}
+	if result == nil {
+		result = []QuotaWindow{}
+	}
+	l.windows = result
+	return nil
+}
+
+// Value implements driver.Valuer. Stores as JSON TEXT.
+func (l QuotaWindowList) Value() (driver.Value, error) {
+	if len(l.windows) == 0 {
+		return []byte("[]"), nil
+	}
+	return common.Marshal(l.windows)
+}
+
+// MarshalJSON implements json.Marshaler for HTTP responses — always produces a JSON array.
+func (l QuotaWindowList) MarshalJSON() ([]byte, error) {
+	if len(l.windows) == 0 {
+		return []byte("[]"), nil
+	}
+	return common.Marshal(l.windows)
+}
+
+// UnmarshalJSON implements json.Unmarshaler for HTTP requests.
+func (l *QuotaWindowList) UnmarshalJSON(data []byte) error {
+	l.invalid = false
+	if len(data) == 0 || string(data) == "null" {
+		l.windows = []QuotaWindow{}
+		return nil
+	}
+	var result []QuotaWindow
+	if err := common.Unmarshal(data, &result); err != nil {
+		return err
+	}
+	if result == nil {
+		result = []QuotaWindow{}
+	}
+	l.windows = result
+	return nil
+}
+
+// QuotaWindowStateList is a custom slice type for QuotaWindowState with GORM Scanner/Valuer.
+type QuotaWindowStateList struct {
+	states  []QuotaWindowState
+	invalid bool
+}
+
+// NewQuotaWindowStateList creates a QuotaWindowStateList from a slice.
+func NewQuotaWindowStateList(states []QuotaWindowState) QuotaWindowStateList {
+	if states == nil {
+		states = []QuotaWindowState{}
+	}
+	return QuotaWindowStateList{states: states}
+}
+
+// Slice returns the underlying slice. Never nil.
+func (l QuotaWindowStateList) Slice() []QuotaWindowState {
+	if l.states == nil {
+		return []QuotaWindowState{}
+	}
+	return l.states
+}
+
+// IsInvalid reports whether the list was loaded from malformed JSON data.
+func (l QuotaWindowStateList) IsInvalid() bool {
+	return l.invalid
+}
+
+// Scan implements sql.Scanner. Display-tolerant: malformed JSON → empty list, no error.
+func (l *QuotaWindowStateList) Scan(value interface{}) error {
+	l.invalid = false
+	if value == nil {
+		l.states = []QuotaWindowState{}
+		return nil
+	}
+	var bytesValue []byte
+	switch v := value.(type) {
+	case []byte:
+		bytesValue = v
+	case string:
+		bytesValue = []byte(v)
+	default:
+		l.states = []QuotaWindowState{}
+		l.invalid = true
+		return nil
+	}
+	if len(bytesValue) == 0 {
+		l.states = []QuotaWindowState{}
+		return nil
+	}
+	var result []QuotaWindowState
+	if err := common.Unmarshal(bytesValue, &result); err != nil {
+		l.states = []QuotaWindowState{}
+		l.invalid = true
+		return nil
+	}
+	if result == nil {
+		result = []QuotaWindowState{}
+	}
+	l.states = result
+	return nil
+}
+
+// Value implements driver.Valuer. Stores as JSON TEXT.
+func (l QuotaWindowStateList) Value() (driver.Value, error) {
+	if len(l.states) == 0 {
+		return []byte("[]"), nil
+	}
+	return common.Marshal(l.states)
+}
+
+// MarshalJSON implements json.Marshaler for HTTP responses.
+func (l QuotaWindowStateList) MarshalJSON() ([]byte, error) {
+	if len(l.states) == 0 {
+		return []byte("[]"), nil
+	}
+	return common.Marshal(l.states)
+}
+
+// UnmarshalJSON implements json.Unmarshaler for HTTP requests.
+func (l *QuotaWindowStateList) UnmarshalJSON(data []byte) error {
+	l.invalid = false
+	if len(data) == 0 || string(data) == "null" {
+		l.states = []QuotaWindowState{}
+		return nil
+	}
+	var result []QuotaWindowState
+	if err := common.Unmarshal(data, &result); err != nil {
+		return err
+	}
+	if result == nil {
+		result = []QuotaWindowState{}
+	}
+	l.states = result
+	return nil
+}
+
+// QuotaWindowSnapshotList is a custom slice type for QuotaWindowSnapshot with GORM Scanner/Valuer.
+type QuotaWindowSnapshotList struct {
+	snapshots []QuotaWindowSnapshot
+	invalid   bool
+}
+
+// NewQuotaWindowSnapshotList creates a QuotaWindowSnapshotList from a slice.
+func NewQuotaWindowSnapshotList(snapshots []QuotaWindowSnapshot) QuotaWindowSnapshotList {
+	if snapshots == nil {
+		snapshots = []QuotaWindowSnapshot{}
+	}
+	return QuotaWindowSnapshotList{snapshots: snapshots}
+}
+
+// Slice returns the underlying slice. Never nil.
+func (l QuotaWindowSnapshotList) Slice() []QuotaWindowSnapshot {
+	if l.snapshots == nil {
+		return []QuotaWindowSnapshot{}
+	}
+	return l.snapshots
+}
+
+// IsInvalid reports whether the list was loaded from malformed JSON data.
+func (l QuotaWindowSnapshotList) IsInvalid() bool {
+	return l.invalid
+}
+
+// Scan implements sql.Scanner. Display-tolerant: malformed JSON → empty list, no error.
+func (l *QuotaWindowSnapshotList) Scan(value interface{}) error {
+	l.invalid = false
+	if value == nil {
+		l.snapshots = []QuotaWindowSnapshot{}
+		return nil
+	}
+	var bytesValue []byte
+	switch v := value.(type) {
+	case []byte:
+		bytesValue = v
+	case string:
+		bytesValue = []byte(v)
+	default:
+		l.snapshots = []QuotaWindowSnapshot{}
+		l.invalid = true
+		return nil
+	}
+	if len(bytesValue) == 0 {
+		l.snapshots = []QuotaWindowSnapshot{}
+		return nil
+	}
+	var result []QuotaWindowSnapshot
+	if err := common.Unmarshal(bytesValue, &result); err != nil {
+		l.snapshots = []QuotaWindowSnapshot{}
+		l.invalid = true
+		return nil
+	}
+	if result == nil {
+		result = []QuotaWindowSnapshot{}
+	}
+	l.snapshots = result
+	return nil
+}
+
+// Value implements driver.Valuer. Stores as JSON TEXT.
+func (l QuotaWindowSnapshotList) Value() (driver.Value, error) {
+	if len(l.snapshots) == 0 {
+		return []byte("[]"), nil
+	}
+	return common.Marshal(l.snapshots)
+}
+
+// MarshalJSON implements json.Marshaler for HTTP responses.
+func (l QuotaWindowSnapshotList) MarshalJSON() ([]byte, error) {
+	if len(l.snapshots) == 0 {
+		return []byte("[]"), nil
+	}
+	return common.Marshal(l.snapshots)
+}
+
+// UnmarshalJSON implements json.Unmarshaler for HTTP requests.
+func (l *QuotaWindowSnapshotList) UnmarshalJSON(data []byte) error {
+	l.invalid = false
+	if len(data) == 0 || string(data) == "null" {
+		l.snapshots = []QuotaWindowSnapshot{}
+		return nil
+	}
+	var result []QuotaWindowSnapshot
+	if err := common.Unmarshal(data, &result); err != nil {
+		return err
+	}
+	if result == nil {
+		result = []QuotaWindowSnapshot{}
+	}
+	l.snapshots = result
+	return nil
+}
+
+// --- Validation helpers ---
+
+// ValidateQuotaWindows validates a list of QuotaWindow definitions.
+// Rejects: duplicate names, duration_seconds <= 0, quota <= 0, count > MaxSubscriptionQuotaWindows.
+func ValidateQuotaWindows(windows []QuotaWindow) error {
+	if len(windows) == 0 {
+		return errors.New("quota windows must not be empty")
+	}
+	if len(windows) > MaxSubscriptionQuotaWindows {
+		return fmt.Errorf("quota windows count %d exceeds maximum %d", len(windows), MaxSubscriptionQuotaWindows)
+	}
+	seen := make(map[string]bool, len(windows))
+	for i, w := range windows {
+		if strings.TrimSpace(w.Name) == "" {
+			return fmt.Errorf("quota window[%d]: name must not be empty", i)
+		}
+		if seen[w.Name] {
+			return fmt.Errorf("quota window[%d]: duplicate name %q", i, w.Name)
+		}
+		seen[w.Name] = true
+		if w.DurationSeconds <= 0 {
+			return fmt.Errorf("quota window[%d]: duration_seconds must be > 0, got %d", i, w.DurationSeconds)
+		}
+		if w.Quota <= 0 {
+			return fmt.Errorf("quota window[%d]: quota must be > 0, got %d", i, w.Quota)
+		}
+	}
+	return nil
+}
+
+// ValidateQuotaWindowUsedOverflow checks each window state against a prospective amount
+// to ensure used + amount does not overflow int64.
+func ValidateQuotaWindowUsedOverflow(windows []QuotaWindowState, amount int64) error {
+	for i, w := range windows {
+		if w.Used > 0 && amount > 0 {
+			if w.Used > math.MaxInt64-amount {
+				return fmt.Errorf("quota window[%d]: used(%d) + amount(%d) would overflow int64", i, w.Used, amount)
+			}
+		}
+	}
+	return nil
+}
+
+// NormalizeQuotaWindows normalizes a slice of QuotaWindow before persistence.
+// Returns an empty (non-nil) slice for nil/empty input.
+func NormalizeQuotaWindows(windows []QuotaWindow) []QuotaWindow {
+	if len(windows) == 0 {
+		return []QuotaWindow{}
+	}
+	return windows
+}
+
+// PerformLazyWindowReset applies lazy window reset logic to a single QuotaWindowState.
+//   - If window_start == 0 (never used), sets window_start = now (first use starts the window).
+//   - If now >= window_start + duration_seconds, resets used = 0 and sets window_start = now (window expired, start fresh).
+//   - Otherwise, no change (window still active).
+//
+// No rolling decay — full reset only at window boundary.
+func PerformLazyWindowReset(state *QuotaWindowState, now int64) {
+	if state == nil {
+		return
+	}
+	// First use: window never started
+	if state.WindowStart == 0 {
+		state.WindowStart = now
+		return
+	}
+	// Window expired: reset used and restart
+	if now >= state.WindowStart+state.DurationSeconds {
+		state.Used = 0
+		state.WindowStart = now
+	}
+	// Otherwise: window still active, no change
 }
