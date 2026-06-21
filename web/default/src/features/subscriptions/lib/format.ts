@@ -16,51 +16,96 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { TFunction } from 'i18next'
-import dayjs from '@/lib/dayjs'
-import type { SubscriptionPlan } from '../types'
+import type { TFunction } from "i18next";
+import dayjs from "@/lib/dayjs";
+import type { SubscriptionPlan } from "../types";
 
 export function formatDuration(
-  plan: Partial<SubscriptionPlan>,
-  t: TFunction
+	plan: Partial<SubscriptionPlan>,
+	t: TFunction,
 ): string {
-  const unit = plan?.duration_unit || 'month'
-  const value = plan?.duration_value || 1
-  const unitLabels: Record<string, string> = {
-    year: t('years'),
-    month: t('months'),
-    day: t('days'),
-    hour: t('hours'),
-    custom: t('Custom (seconds)'),
-  }
-  if (unit === 'custom') {
-    const seconds = plan?.custom_seconds || 0
-    if (seconds >= 86400) return `${Math.floor(seconds / 86400)} ${t('days')}`
-    if (seconds >= 3600) return `${Math.floor(seconds / 3600)} ${t('hours')}`
-    return `${seconds} ${t('seconds')}`
-  }
-  return `${value} ${unitLabels[unit] || unit}`
+	const unit = plan?.duration_unit || "month";
+	const value = plan?.duration_value || 1;
+	const unitLabels: Record<string, string> = {
+		year: t("years"),
+		month: t("months"),
+		day: t("days"),
+		hour: t("hours"),
+		custom: t("Custom (seconds)"),
+	};
+	if (unit === "custom") {
+		const seconds = plan?.custom_seconds || 0;
+		if (seconds >= 86400) return `${Math.floor(seconds / 86400)} ${t("days")}`;
+		if (seconds >= 3600) return `${Math.floor(seconds / 3600)} ${t("hours")}`;
+		return `${seconds} ${t("seconds")}`;
+	}
+	return `${value} ${unitLabels[unit] || unit}`;
 }
 
 export function formatResetPeriod(
-  plan: Partial<SubscriptionPlan>,
-  t: TFunction
+	plan: Partial<SubscriptionPlan>,
+	t: TFunction,
 ): string {
-  const period = plan?.quota_reset_period || 'never'
-  if (period === 'daily') return t('Daily')
-  if (period === 'weekly') return t('Weekly')
-  if (period === 'monthly') return t('Monthly')
-  if (period === 'custom') {
-    const seconds = Number(plan?.quota_reset_custom_seconds || 0)
-    if (seconds >= 86400) return `${Math.floor(seconds / 86400)} ${t('days')}`
-    if (seconds >= 3600) return `${Math.floor(seconds / 3600)} ${t('hours')}`
-    if (seconds >= 60) return `${Math.floor(seconds / 60)} ${t('minutes')}`
-    return `${seconds} ${t('seconds')}`
-  }
-  return t('No Reset')
+	const period = plan?.quota_reset_period || "never";
+	if (period === "daily") return t("Daily");
+	if (period === "weekly") return t("Weekly");
+	if (period === "monthly") return t("Monthly");
+	if (period === "custom") {
+		const seconds = Number(plan?.quota_reset_custom_seconds || 0);
+		if (seconds >= 86400) return `${Math.floor(seconds / 86400)} ${t("days")}`;
+		if (seconds >= 3600) return `${Math.floor(seconds / 3600)} ${t("hours")}`;
+		if (seconds >= 60) return `${Math.floor(seconds / 60)} ${t("minutes")}`;
+		return `${seconds} ${t("seconds")}`;
+	}
+	return t("No Reset");
 }
 
 export function formatTimestamp(ts: number): string {
-  if (!ts) return '-'
-  return dayjs(ts * 1000).format('YYYY-MM-DD HH:mm:ss')
+	if (!ts) return "-";
+	return dayjs(ts * 1000).format("YYYY-MM-DD HH:mm:ss");
+}
+
+const HOUR = 3600;
+const DAY = 86400;
+const WEEK = 604800;
+const MONTH = 2592000;
+
+export function formatWindowLabel(window: {
+	name: string;
+	duration_seconds: number;
+}): string {
+	const s = window.duration_seconds;
+	if (s < HOUR) return `${s}s`;
+	if (s < DAY) return `${Math.floor(s / HOUR)}h`;
+	if (s < WEEK) return `${Math.floor(s / DAY)}d`;
+	if (s < MONTH) return `${Math.floor(s / WEEK)}w`;
+	return `${Math.floor(s / DAY)}d`;
+}
+
+export function formatWindowRemaining(window: {
+	quota: number;
+	used: number;
+}): string {
+	const remaining = window.quota - window.used;
+	return `${remaining} / ${window.quota}`;
+}
+
+export function formatWindowResetCountdown(
+	window: { duration_seconds: number; window_start: number },
+	now?: number,
+): string {
+	const current = now ?? Math.floor(Date.now() / 1000);
+	const end = window.window_start + window.duration_seconds;
+	if (current >= end) return "Expired";
+	const diff = end - current;
+	if (diff < 60) return `${diff}s`;
+	if (diff < HOUR) return `${Math.floor(diff / 60)}m ${diff % 60}s`;
+	if (diff < DAY) {
+		const h = Math.floor(diff / HOUR);
+		const m = Math.floor((diff % HOUR) / 60);
+		return `${h}h ${m}m`;
+	}
+	const d = Math.floor(diff / DAY);
+	const h = Math.floor((diff % DAY) / HOUR);
+	return `${d}d ${h}h`;
 }
