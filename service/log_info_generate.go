@@ -161,6 +161,8 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 			other["subscription_total"] = relayInfo.SubscriptionAmountTotal
 			other["subscription_used"] = usedFinal
 			other["subscription_remain"] = remain
+		} else if relayInfo.SubscriptionWindowSnapshotsJSON != "" {
+			other["subscription_windowed"] = true
 		}
 		if consumed > 0 {
 			other["subscription_consumed"] = consumed

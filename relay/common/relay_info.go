@@ -147,13 +147,17 @@ type RelayInfo struct {
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
-	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
-	IsChannelTest                         bool // channel test request
-	RetryIndex                            int
-	LastError                             *types.NewAPIError
-	RuntimeHeadersOverride                map[string]any
-	UseRuntimeHeadersOverride             bool
-	ParamOverrideAudit                    []string
+	// Subscription window fields for request-aware adjustment
+	SubscriptionRequestId             string
+	SubscriptionWindowSnapshotsJSON   string
+	SubscriptionWindowCurrentConsumed int64
+	IsClaudeBetaQuery                 bool // /v1/messages?beta=true
+	IsChannelTest                     bool // channel test request
+	RetryIndex                        int
+	LastError                         *types.NewAPIError
+	RuntimeHeadersOverride            map[string]any
+	UseRuntimeHeadersOverride         bool
+	ParamOverrideAudit                []string
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see
