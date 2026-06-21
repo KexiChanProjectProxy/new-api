@@ -123,9 +123,38 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		return false
 	}
 
-	if err := PostConsumeQuota(relayInfo, feeQuota, 0, true); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("failed to charge violation fee: %s", err.Error()))
-		return false
+	// Charge the violation fee. The subscription charge and token deduction are applied
+	// sequentially. If token deduction fails, the subscription charge is reversed to prevent
+	// accounting inconsistency for the synchronous (direct DB) path.
+	// Note: DecreaseTokenQuota in Redis mode spawns a background goroutine (returns nil immediately)
+	// and in batch mode queues the operation (returns nil immediately) — errors from those paths
+	// are handled asynchronously by DecreaseTokenQuota itself. This is a pre-existing pattern
+	// shared by PostConsumeQuota and BillingSession.Settle across the entire codebase.
+	if relayInfo.BillingSource == BillingSourceSubscription && relayInfo.SubscriptionId > 0 {
+		// 1) Charge subscription (FOR UPDATE lock prevents races)
+		if err := model.ChargeViolationFeeOnSubscription(relayInfo.SubscriptionId, int64(feeQuota)); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to charge violation fee on subscription: %s", err.Error()))
+			return false
+		}
+		// 2) Deduct token quota (Redis/batch path, not transactional)
+		tokenErr := error(nil)
+		if !relayInfo.IsPlayground {
+			tokenErr = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, feeQuota)
+		}
+		// 3) If token deduction failed, reverse the subscription charge
+		if tokenErr != nil {
+			logger.LogError(ctx, fmt.Sprintf("violation fee: token deduction failed, reversing subscription charge: %s", tokenErr.Error()))
+			if revErr := model.ReverseViolationFeeOnSubscription(relayInfo.SubscriptionId, int64(feeQuota)); revErr != nil {
+				logger.LogError(ctx, fmt.Sprintf("violation fee: CRITICAL - subscription charge reversal also failed: %s (token err: %s). Accounting may be inconsistent.", revErr.Error(), tokenErr.Error()))
+			}
+			return false
+		}
+	} else {
+		// Wallet billing: PostConsumeQuota handles quota + token adjustment
+		if err := PostConsumeQuota(relayInfo, feeQuota, 0, true); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to charge violation fee: %s", err.Error()))
+			return false
+		}
 	}
 
 	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
