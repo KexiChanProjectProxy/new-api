@@ -294,6 +294,9 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := backfillSubscriptionPreConsumeRecords(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -364,9 +367,26 @@ func migrateDBFast() error {
 		}
 	}
 	common.SysLog("database migrated")
+	if err := backfillSubscriptionPreConsumeRecords(); err != nil {
+		return err
+	}
 	return nil
 }
 
+// backfillSubscriptionPreConsumeRecords populates current_consumed for existing rows
+// that were created before the current_consumed/final_consumed columns were added.
+// - consumed rows with current_consumed=0 → set current_consumed=pre_consumed
+// - refunded rows with current_consumed=0 → leave current_consumed=0 (already correct)
+// - final_consumed is left at 0 for all old rows (cannot reconstruct per-window final amounts)
+func backfillSubscriptionPreConsumeRecords() error {
+	result := DB.Model(&SubscriptionPreConsumeRecord{}).
+		Where("status = ? AND current_consumed = ?", "consumed", 0).
+		Update("current_consumed", gorm.Expr("pre_consumed"))
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
 func migrateLOGDB() error {
 	var err error
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
@@ -439,6 +459,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
 		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
+		{Name: "quota_windows", DDL: "`quota_windows` text DEFAULT '[]'"},
 		{Name: "created_at", DDL: "`created_at` bigint"},
 		{Name: "updated_at", DDL: "`updated_at` bigint"},
 	}
