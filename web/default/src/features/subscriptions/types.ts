@@ -16,37 +16,60 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { z } from 'zod'
+import { z } from "zod";
+
+// ============================================================================
+// Quota Window Schemas & Types
+// ============================================================================
+
+export const quotaWindowSchema = z.object({
+	name: z.string(),
+	duration_seconds: z.number().positive(),
+	quota: z.number().positive(),
+});
+
+export type QuotaWindow = z.infer<typeof quotaWindowSchema>;
+
+export const quotaWindowStateSchema = z.object({
+	name: z.string(),
+	duration_seconds: z.number().positive(),
+	quota: z.number().positive(),
+	used: z.number().min(0),
+	window_start: z.number(),
+});
+
+export type QuotaWindowState = z.infer<typeof quotaWindowStateSchema>;
 
 // ============================================================================
 // Subscription Plan Schema & Types
 // ============================================================================
 
 export const subscriptionPlanSchema = z.object({
-  id: z.number(),
-  title: z.string(),
-  subtitle: z.string().optional(),
-  price_amount: z.number(),
-  currency: z.string().default('USD'),
-  duration_unit: z.enum(['year', 'month', 'day', 'hour', 'custom']),
-  duration_value: z.number(),
-  custom_seconds: z.number().optional(),
-  quota_reset_period: z.enum(['never', 'daily', 'weekly', 'monthly', 'custom']),
-  quota_reset_custom_seconds: z.number().optional(),
-  enabled: z.boolean(),
-  sort_order: z.number(),
-  max_purchase_per_user: z.number(),
-  total_amount: z.number(),
-  upgrade_group: z.string().optional(),
-  stripe_price_id: z.string().optional(),
-  creem_product_id: z.string().optional(),
-  waffo_pancake_product_id: z.string().optional(),
-})
+	id: z.number(),
+	title: z.string(),
+	subtitle: z.string().optional(),
+	price_amount: z.number(),
+	currency: z.string().default("USD"),
+	duration_unit: z.enum(["year", "month", "day", "hour", "custom"]),
+	duration_value: z.number(),
+	custom_seconds: z.number().optional(),
+	quota_reset_period: z.enum(["never", "daily", "weekly", "monthly", "custom"]),
+	quota_reset_custom_seconds: z.number().optional(),
+	enabled: z.boolean(),
+	sort_order: z.number(),
+	max_purchase_per_user: z.number(),
+	total_amount: z.number(),
+	upgrade_group: z.string().optional(),
+	stripe_price_id: z.string().optional(),
+	creem_product_id: z.string().optional(),
+	waffo_pancake_product_id: z.string().optional(),
+	quota_windows: z.array(quotaWindowSchema).optional().default([]),
+});
 
-export type SubscriptionPlan = z.infer<typeof subscriptionPlanSchema>
+export type SubscriptionPlan = z.infer<typeof subscriptionPlanSchema>;
 
 export interface PlanRecord {
-  plan: SubscriptionPlan
+	plan: SubscriptionPlan;
 }
 
 // ============================================================================
@@ -54,22 +77,24 @@ export interface PlanRecord {
 // ============================================================================
 
 export const userSubscriptionSchema = z.object({
-  id: z.number(),
-  user_id: z.number(),
-  plan_id: z.number(),
-  status: z.string(),
-  source: z.string().optional(),
-  start_time: z.number(),
-  end_time: z.number(),
-  amount_total: z.number(),
-  amount_used: z.number(),
-  next_reset_time: z.number().optional(),
-})
+	id: z.number(),
+	user_id: z.number(),
+	plan_id: z.number(),
+	status: z.string(),
+	source: z.string().optional(),
+	start_time: z.number(),
+	end_time: z.number(),
+	amount_total: z.number(),
+	amount_used: z.number(),
+	next_reset_time: z.number().optional(),
+	quota_windows: z.array(quotaWindowSchema).optional().default([]),
+	quota_window_states: z.array(quotaWindowStateSchema).optional().default([]),
+});
 
-export type UserSubscription = z.infer<typeof userSubscriptionSchema>
+export type UserSubscription = z.infer<typeof userSubscriptionSchema>;
 
 export interface UserSubscriptionRecord {
-  subscription: UserSubscription
+	subscription: UserSubscription;
 }
 
 // ============================================================================
@@ -77,41 +102,41 @@ export interface UserSubscriptionRecord {
 // ============================================================================
 
 export interface ApiResponse<T = unknown> {
-  success: boolean
-  message?: string
-  data?: T
+	success: boolean;
+	message?: string;
+	data?: T;
 }
 
 export interface PlanPayload {
-  plan: Partial<SubscriptionPlan>
+	plan: Partial<SubscriptionPlan>;
 }
 
 export interface SubscriptionPayRequest {
-  plan_id: number
-  payment_method?: string
+	plan_id: number;
+	payment_method?: string;
 }
 
 export interface SubscriptionPayResponse {
-  success: boolean
-  message?: string
-  data?: {
-    // Stripe-style hosted checkout link.
-    pay_link?: string
-    // Waffo Pancake / Creem hosted checkout URL.
-    checkout_url?: string
-    // Pancake-only: order metadata + self-service buyer session token,
-    // surfaced for future flows (refund / cancel from new-api's own UI).
-    session_id?: string
-    expires_at?: number | string
-    order_id?: string
-    token?: string
-    token_expires_at?: number | string
-  }
-  url?: string
+	success: boolean;
+	message?: string;
+	data?: {
+		// Stripe-style hosted checkout link.
+		pay_link?: string;
+		// Waffo Pancake / Creem hosted checkout URL.
+		checkout_url?: string;
+		// Pancake-only: order metadata + self-service buyer session token,
+		// surfaced for future flows (refund / cancel from new-api's own UI).
+		session_id?: string;
+		expires_at?: number | string;
+		order_id?: string;
+		token?: string;
+		token_expires_at?: number | string;
+	};
+	url?: string;
 }
 
 export interface CreateUserSubscriptionRequest {
-  plan_id: number
+	plan_id: number;
 }
 
 // ============================================================================
@@ -119,13 +144,13 @@ export interface CreateUserSubscriptionRequest {
 // ============================================================================
 
 export interface SelfSubscriptionData {
-  billing_preference: string
-  subscriptions: UserSubscriptionRecord[]
-  all_subscriptions: UserSubscriptionRecord[]
+	billing_preference: string;
+	subscriptions: UserSubscriptionRecord[];
+	all_subscriptions: UserSubscriptionRecord[];
 }
 
 // ============================================================================
 // Dialog Types
 // ============================================================================
 
-export type SubscriptionsDialogType = 'create' | 'update' | 'toggle-status'
+export type SubscriptionsDialogType = "create" | "update" | "toggle-status";
