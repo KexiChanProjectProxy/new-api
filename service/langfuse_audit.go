@@ -312,40 +312,31 @@ func (s *LangfuseAuditSnapshot) FinalizeLatency(end ...time.Time) {
 	s.Metadata.TotalLatencyMs = endTime.UnixMilli() - s.Metadata.StartTime.UnixMilli()
 }
 
-// MaskLangfuseAudit applies all redaction + masking + truncation rules to an
-// already-populated snapshot in place. It is idempotent: calling it twice
-// produces the same output. Specifically it:
+// MaskLangfuseAudit applies redaction + masking rules to an already-populated
+// snapshot in place. It is idempotent: calling it twice produces the same
+// output. Specifically it:
 //
-//  1. Runs the request/response/error payloads through common.MaskSensitiveInfo
-//     to redact URLs, IPs, domains, and api_key:... patterns at the string level.
-//  2. Enforces the 64 KiB cap on each of request/response/error payloads,
-//     recording the original length and a truncation flag in
-//     TruncationMarkers.
-//  3. Re-masks the token key in metadata (defensive — DeriveLangfuseMetadata
+//  1. Re-masks the token key in metadata (defensive — DeriveLangfuseMetadata
 //     already masks, but if a caller hand-built metadata this catches it).
+//  2. Runs error payload through common.MaskSensitiveInfo to redact channel
+//     keys and other sensitive strings that may appear in error messages.
+//  3. Enforces the 64 KiB cap on the error payload only.
 //
-// This function does NOT emit anything; it only prepares the snapshot for
-// emission by Task 4/5.
+// Request and response payloads carry the full client-visible dialogue content
+// and are intentionally NOT masked or truncated. Binary responses are already
+// handled via SetBinaryResponse and leave no raw bytes on the snapshot.
 func MaskLangfuseAudit(snapshot *LangfuseAuditSnapshot) {
 	if snapshot == nil {
 		return
 	}
 
-	// 1. String-level sensitive-info redaction on each text payload.
-	snapshot.RequestPayload = maskBytes(snapshot.RequestPayload)
-	snapshot.ResponsePayload = maskBytes(snapshot.ResponsePayload)
-	snapshot.ErrorPayload = maskBytes(snapshot.ErrorPayload)
+	// 1. Defensive token-key re-mask.
+	snapshot.Metadata.MaskedTokenKey = model.MaskTokenKey(snapshot.Metadata.MaskedTokenKey)
 
-	// 2. 64 KiB cap enforcement with markers.
-	snapshot.RequestPayload, snapshot.TruncationMarkers.RequestTruncated, snapshot.TruncationMarkers.RequestOriginal =
-		capPayload(snapshot.RequestPayload, langfuseMaxPayloadBytes)
-	snapshot.ResponsePayload, snapshot.TruncationMarkers.ResponseTruncated, snapshot.TruncationMarkers.ResponseOriginal =
-		capPayload(snapshot.ResponsePayload, langfuseMaxPayloadBytes)
+	// 2. Error payload: mask sensitive info + cap at 64 KiB.
+	snapshot.ErrorPayload = maskBytes(snapshot.ErrorPayload)
 	snapshot.ErrorPayload, snapshot.TruncationMarkers.ErrorTruncated, snapshot.TruncationMarkers.ErrorOriginal =
 		capPayload(snapshot.ErrorPayload, langfuseMaxPayloadBytes)
-
-	// 3. Defensive token-key re-mask.
-	snapshot.Metadata.MaskedTokenKey = model.MaskTokenKey(snapshot.Metadata.MaskedTokenKey)
 }
 
 // maskBytes runs common.MaskSensitiveInfo over a byte payload. It is a no-op

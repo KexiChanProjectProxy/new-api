@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -82,8 +83,8 @@ func TestLangfuseCapturesFinalNonStreamResponse(t *testing.T) {
 }
 
 // TestLangfuseExportsOnlyFinalStreamOutcome verifies that OaiStreamHandler
-// captures ONLY the normalized terminal stream payload (the final SSE chunk
-// with usage + finish_reason), never per-token deltas.
+// captures the FULL accumulated stream output text (all delta chunks combined),
+// not just the final SSE event.
 func TestLangfuseExportsOnlyFinalStreamOutcome(t *testing.T) {
 	if constant.StreamingTimeout <= 0 {
 		constant.StreamingTimeout = 30
@@ -92,6 +93,7 @@ func TestLangfuseExportsOnlyFinalStreamOutcome(t *testing.T) {
 	c, info, snap := newCaptureTestContext(t)
 	info.IsStream = true
 	info.ShouldIncludeUsage = true
+	info.RelayMode = relayconstant.RelayModeChatCompletions
 
 	// Build a minimal SSE stream: one delta chunk then a final chunk with usage.
 	deltaChunk := `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"he"}}]}`
@@ -108,9 +110,8 @@ func TestLangfuseExportsOnlyFinalStreamOutcome(t *testing.T) {
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
 
-	require.NotEmpty(t, snap.payload, "snapshot must capture the terminal stream payload")
-	require.NotContains(t, string(snap.payload), `"content":"he"`, "per-token delta must NOT be forwarded")
-	require.Contains(t, string(snap.payload), `"finish_reason":"stop"`, "terminal payload must carry finish_reason")
+	require.NotEmpty(t, snap.payload, "snapshot must capture the full accumulated stream output")
+	require.Equal(t, "he", string(snap.payload), "must contain the accumulated response text from all deltas")
 }
 
 // TestLangfuseCapturesResponsesCompletedPayload verifies that

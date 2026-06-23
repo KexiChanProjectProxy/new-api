@@ -186,11 +186,10 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
-	// Langfuse audit: capture the single normalized terminal stream payload
-	// (the final SSE chunk carrying usage + finish_reason). Per-token deltas
-	// are never forwarded.
-	if info.LangfuseSnapshot != nil && lastStreamData != "" {
-		info.LangfuseSnapshot.SetResponsePayloadFromString(lastStreamData)
+	// Langfuse audit: capture the full accumulated stream output text
+	// (all delta chunks combined, not just the final SSE event).
+	if info.LangfuseSnapshot != nil && responseTextBuilder.Len() > 0 {
+		info.LangfuseSnapshot.SetResponsePayloadFromString(responseTextBuilder.String())
 	}
 
 	return usage, nil

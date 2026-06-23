@@ -39,8 +39,8 @@ func (f *fakeLangfuseSnapshot) SetBinaryResponse(contentType string, body []byte
 }
 
 // TestLangfuseExportsClaudeFinalStreamOutcome verifies ClaudeStreamHandler
-// captures ONLY the terminal message_delta event (the SSE chunk that sets
-// Done=true), never the per-token text deltas.
+// captures the FULL accumulated stream output text (all content_block_delta
+// chunks combined), not just the terminal message_delta event.
 func TestLangfuseExportsClaudeFinalStreamOutcome(t *testing.T) {
 	if constant.StreamingTimeout <= 0 {
 		constant.StreamingTimeout = 30
@@ -85,8 +85,6 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
 
-	require.NotEmpty(t, snap.payload, "snapshot must capture the terminal message_delta payload")
-	require.NotContains(t, string(snap.payload), `"text":"hel"`, "per-token text delta must NOT be forwarded")
-	require.Contains(t, string(snap.payload), `"type":"message_delta"`, "must capture the message_delta event")
-	require.Contains(t, string(snap.payload), `"stop_reason":"end_turn"`, "terminal payload must carry stop_reason")
+	require.NotEmpty(t, snap.payload, "snapshot must capture the full accumulated stream output")
+	require.Equal(t, "hel", string(snap.payload), "must contain the accumulated response text from all content_block_delta chunks")
 }

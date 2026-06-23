@@ -874,15 +874,11 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		Usage:        &dto.Usage{},
 	}
 	var err *types.NewAPIError
-	var finalDeltaData string
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
 		if err != nil {
 			sr.Stop(err)
 			return
-		}
-		if claudeInfo.Done {
-			finalDeltaData = data
 		}
 	})
 	if err != nil {
@@ -891,11 +887,10 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
 
-	// Langfuse audit: capture the single normalized terminal payload
-	// (the message_delta event that completes the stream). Per-token
-	// deltas are never forwarded.
-	if info.LangfuseSnapshot != nil && finalDeltaData != "" {
-		info.LangfuseSnapshot.SetResponsePayloadFromString(finalDeltaData)
+	// Langfuse audit: capture the full accumulated stream output text
+	// (all content chunks combined, not just the final delta event).
+	if info.LangfuseSnapshot != nil && claudeInfo.ResponseText.Len() > 0 {
+		info.LangfuseSnapshot.SetResponsePayloadFromString(claudeInfo.ResponseText.String())
 	}
 
 	return claudeInfo.Usage, nil

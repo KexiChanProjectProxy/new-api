@@ -96,31 +96,31 @@ func TestLangfuseMasksTokenAndSensitiveFields(t *testing.T) {
 	require.NotEqual(t, "sk-super-secret-key-1234567890", snapshot.Metadata.MaskedTokenKey)
 	require.NotEmpty(t, snapshot.Metadata.MaskedTokenKey)
 
-	// 2. Raw token key must not appear anywhere in the serialized snapshot.
-	raw, err := common.Marshal(snapshot)
-	require.NoError(t, err)
-	require.NotContains(t, string(raw), "sk-super-secret-key-1234567890")
-
-	// 3. MaskSensitiveInfo is applied to request payload: embed a URL + IP
-	//    into the request body and confirm they get redacted.
-	info.Request = &dto.GeneralOpenAIRequest{
-		Model: "gpt-4o",
-	}
+	// 2. Defensive re-mask overwrites a raw-looking token key with the masked form.
 	snapshot2 := &LangfuseAuditSnapshot{
-		RequestPayload: []byte(`{"url":"https://api.openai.com/v1/secret","ip":"192.168.1.1"}`),
 		Metadata: LangfuseAuditMetadata{
 			MaskedTokenKey: "sk-leaked-key-99999",
 		},
 	}
 	MaskLangfuseAudit(snapshot2)
-	require.NotContains(t, string(snapshot2.RequestPayload), "api.openai.com")
-	require.NotContains(t, string(snapshot2.RequestPayload), "192.168.1.1")
-	// Defensive re-mask overwrites a raw-looking token key with the masked form.
 	require.NotEqual(t, "sk-leaked-key-99999", snapshot2.Metadata.MaskedTokenKey)
+
+	// 3. Request payload content is intentionally NOT masked (full dialogue).
+	//    Only error payloads undergo MaskSensitiveInfo.
+	snapshot3 := &LangfuseAuditSnapshot{
+		RequestPayload: []byte(`{"url":"https://api.openai.com/v1/secret","ip":"192.168.1.1"}`),
+	}
+	MaskLangfuseAudit(snapshot3)
+	// Request payload must NOT be masked — it carries the full dialogue.
+	require.Contains(t, string(snapshot3.RequestPayload), "api.openai.com")
+	require.Contains(t, string(snapshot3.RequestPayload), "192.168.1.1")
 }
 
 func TestLangfuseTruncatesLargeAuditPayloads(t *testing.T) {
 	huge := strings.Repeat("a", 100*1024) // 100 KiB, well over the 64 KiB cap.
+
+	// Request and response payloads are never truncated — only error payloads
+	// are capped at 64 KiB to protect channel keys in error messages.
 	snapshot := &LangfuseAuditSnapshot{
 		RequestPayload:  []byte(huge),
 		ResponsePayload: []byte(huge),
@@ -128,25 +128,26 @@ func TestLangfuseTruncatesLargeAuditPayloads(t *testing.T) {
 	}
 	MaskLangfuseAudit(snapshot)
 
-	require.Equal(t, 100*1024, snapshot.TruncationMarkers.RequestOriginal)
-	require.True(t, snapshot.TruncationMarkers.RequestTruncated)
-	require.Equal(t, langfuseMaxPayloadBytes, len(snapshot.RequestPayload))
-	require.True(t, strings.HasSuffix(string(snapshot.RequestPayload), langfuseTruncationMarker))
+	// Request and response must NOT be truncated (full dialogue preserved).
+	require.False(t, snapshot.TruncationMarkers.RequestTruncated)
+	require.Equal(t, 0, snapshot.TruncationMarkers.RequestOriginal)
+	require.Equal(t, 100*1024, len(snapshot.RequestPayload))
 
-	require.Equal(t, 100*1024, snapshot.TruncationMarkers.ResponseOriginal)
-	require.True(t, snapshot.TruncationMarkers.ResponseTruncated)
-	require.Equal(t, langfuseMaxPayloadBytes, len(snapshot.ResponsePayload))
+	require.False(t, snapshot.TruncationMarkers.ResponseTruncated)
+	require.Equal(t, 0, snapshot.TruncationMarkers.ResponseOriginal)
+	require.Equal(t, 100*1024, len(snapshot.ResponsePayload))
 
+	// Error payload must be capped.
 	require.Equal(t, 100*1024, snapshot.TruncationMarkers.ErrorOriginal)
 	require.True(t, snapshot.TruncationMarkers.ErrorTruncated)
 	require.Equal(t, langfuseMaxPayloadBytes, len(snapshot.ErrorPayload))
 
 	// Small payloads are not truncated.
 	small := []byte(`{"ok":true}`)
-	snapshot2 := &LangfuseAuditSnapshot{RequestPayload: small}
+	snapshot2 := &LangfuseAuditSnapshot{ErrorPayload: small}
 	MaskLangfuseAudit(snapshot2)
-	require.False(t, snapshot2.TruncationMarkers.RequestTruncated)
-	require.Equal(t, len(small), snapshot2.TruncationMarkers.RequestOriginal)
+	require.False(t, snapshot2.TruncationMarkers.ErrorTruncated)
+	require.Equal(t, len(small), snapshot2.TruncationMarkers.ErrorOriginal)
 }
 
 func TestLangfuseBinaryPlaceholderIncludesHash(t *testing.T) {
