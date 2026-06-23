@@ -64,15 +64,24 @@ type LangfuseAuditMetadata struct {
 	TokenName        string `json:"token_name,omitempty"`
 	Username         string `json:"username,omitempty"`
 	UserId           int    `json:"user_id"`
+	UserEmail        string `json:"user_email,omitempty"`
+	UserQuota        int    `json:"user_quota"`
+
+	// Token
+	TokenUnlimited bool `json:"token_unlimited"`
 
 	// Correlation IDs
 	RequestId         string `json:"request_id,omitempty"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty"`
 
 	// Routing / model
-	ModelName  string `json:"model_name,omitempty"`
-	GroupName  string `json:"group,omitempty"`
-	UsingGroup string `json:"using_group,omitempty"`
+	ModelName       string `json:"model_name,omitempty"`
+	GroupName       string `json:"group,omitempty"`
+	UsingGroup      string `json:"using_group,omitempty"`
+	RelayFormat     string `json:"relay_format,omitempty"`
+	RelayMode       int    `json:"relay_mode"`
+	RequestURLPath  string `json:"request_url_path,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 
 	// Channel
 	ChannelId         int    `json:"channel_id"`
@@ -81,24 +90,29 @@ type LangfuseAuditMetadata struct {
 	IsModelMapped     bool   `json:"is_model_mapped"`
 
 	// Retry chain (channel IDs tried, in order)
-	RetryChain  []int  `json:"retry_chain,omitempty"`
-	RetryIndex  int    `json:"retry_index"`
-	RelayFormat string `json:"relay_format,omitempty"`
+	RetryChain []int `json:"retry_chain,omitempty"`
+	RetryIndex int   `json:"retry_index"`
 
-	// Usage / billing (populated at settlement time by Task 4/5; zero-valued
-	// at request-snapshot time).
+	// Billing
+	Quota                 int    `json:"quota"`
+	BillingSource         string `json:"billing_source,omitempty"`
+	SubscriptionPlanTitle string `json:"subscription_plan_title,omitempty"`
+	FinalPreConsumedQuota int    `json:"final_pre_consumed_quota"`
+	UsePrice              bool   `json:"use_price"`
+
+	// Token counts (populated at settlement)
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
-	Quota            int `json:"quota"`
 
-	// Latency (ms). FirstResponseLatencyMs is -1 until FirstResponseTime is set.
+	// Latency (ms)
 	FirstResponseLatencyMs int64 `json:"first_response_latency_ms"`
 	TotalLatencyMs         int64 `json:"total_latency_ms"`
 
 	// Flags
-	IsStream     bool `json:"is_stream"`
-	IsPlayground bool `json:"is_playground"`
+	IsStream      bool `json:"is_stream"`
+	IsPlayground  bool `json:"is_playground"`
+	IsChannelTest bool `json:"is_channel_test"`
 }
 
 // LangfuseAuditSnapshot is the in-memory representation of one relay request
@@ -158,15 +172,25 @@ func DeriveLangfuseMetadata(relayInfo *relaycommon.RelayInfo, c *gin.Context) La
 		meta.ResolvedClientIP = relayInfo.ResolvedClientIP
 		meta.MaskedTokenKey = model.MaskTokenKey(relayInfo.TokenKey)
 		meta.UserId = relayInfo.UserId
-		// UserEmail is deliberately omitted to avoid PII leakage; Username is pulled from context below.
+		meta.UserEmail = relayInfo.UserEmail
+		meta.UserQuota = relayInfo.UserQuota
+		meta.TokenUnlimited = relayInfo.TokenUnlimited
 		meta.ModelName = relayInfo.OriginModelName
 		meta.GroupName = relayInfo.TokenGroup
 		meta.UsingGroup = relayInfo.UsingGroup
 		meta.RequestId = relayInfo.RequestId
 		meta.IsStream = relayInfo.IsStream
 		meta.IsPlayground = relayInfo.IsPlayground
+		meta.IsChannelTest = relayInfo.IsChannelTest
 		meta.RelayFormat = string(relayInfo.RelayFormat)
+		meta.RelayMode = relayInfo.RelayMode
+		meta.RequestURLPath = relayInfo.RequestURLPath
+		meta.ReasoningEffort = relayInfo.ReasoningEffort
 		meta.RetryIndex = relayInfo.RetryIndex
+		meta.BillingSource = relayInfo.BillingSource
+		meta.SubscriptionPlanTitle = relayInfo.SubscriptionPlanTitle
+		meta.FinalPreConsumedQuota = relayInfo.FinalPreConsumedQuota
+		meta.UsePrice = relayInfo.UsePrice
 
 		if relayInfo.ChannelMeta != nil {
 			meta.ChannelId = relayInfo.ChannelId
@@ -181,8 +205,6 @@ func DeriveLangfuseMetadata(relayInfo *relaycommon.RelayInfo, c *gin.Context) La
 		} else {
 			meta.FirstResponseLatencyMs = -1
 		}
-		// TotalLatencyMs is finalized at settlement time; we seed it with
-		// elapsed-so-far so an early-emitted trace still has something useful.
 		if !relayInfo.StartTime.IsZero() {
 			meta.TotalLatencyMs = time.Since(relayInfo.StartTime).Milliseconds()
 		}
