@@ -186,6 +186,13 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
+	// Langfuse audit: capture the single normalized terminal stream payload
+	// (the final SSE chunk carrying usage + finish_reason). Per-token deltas
+	// are never forwarded.
+	if info.LangfuseSnapshot != nil && lastStreamData != "" {
+		info.LangfuseSnapshot.SetResponsePayloadFromString(lastStreamData)
+	}
+
 	return usage, nil
 }
 
@@ -290,6 +297,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+
+	if info.LangfuseSnapshot != nil {
+		info.LangfuseSnapshot.SetResponsePayload(responseBody)
+	}
 
 	return &simpleResponse.Usage, nil
 }

@@ -29,6 +29,7 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	usage := &dto.Usage{}
 	usage.PromptTokens = info.GetEstimatePromptTokens()
 	usage.TotalTokens = info.GetEstimatePromptTokens()
+	streamedBinary := false
 	for k, v := range resp.Header {
 		if !service.ShouldCopyUpstreamHeader(c, k, v) {
 			continue
@@ -38,6 +39,7 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	c.Writer.WriteHeader(resp.StatusCode)
 
 	if info.IsStream {
+		streamedBinary = true
 		helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 			if service.SundaySearch(data, "usage") {
 				var simpleResponse dto.SimpleResponse
@@ -109,6 +111,14 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 			usage.CompletionTokenDetails.AudioTokens = completionTokens
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+
+		if info.LangfuseSnapshot != nil {
+			info.LangfuseSnapshot.SetBinaryResponse(resp.Header.Get("Content-Type"), bodyBytes, "binary audio response")
+		}
+	}
+
+	if info.LangfuseSnapshot != nil && streamedBinary {
+		info.LangfuseSnapshot.SetBinaryResponse(resp.Header.Get("Content-Type"), nil, "streamed binary audio response (bytes not buffered)")
 	}
 
 	return usage
@@ -123,6 +133,10 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	}
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+
+	if info.LangfuseSnapshot != nil {
+		info.LangfuseSnapshot.SetResponsePayload(responseBody)
+	}
 
 	var responseData struct {
 		Usage *dto.Usage `json:"usage"`

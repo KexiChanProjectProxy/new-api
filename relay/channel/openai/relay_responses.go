@@ -43,6 +43,10 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
+	if info != nil && info.LangfuseSnapshot != nil {
+		info.LangfuseSnapshot.SetResponsePayload(responseBody)
+	}
+
 	// compute usage
 	usage := dto.Usage{}
 	if responsesResponse.Usage != nil {
@@ -78,6 +82,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var completedPayload string
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -91,6 +96,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed":
+			completedPayload = data
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
@@ -145,6 +151,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+
+	// Langfuse audit: capture the single normalized terminal payload
+	// (response.completed event). Per-token deltas are never forwarded.
+	if info.LangfuseSnapshot != nil && completedPayload != "" {
+		info.LangfuseSnapshot.SetResponsePayloadFromString(completedPayload)
+	}
 
 	return usage, nil
 }
