@@ -61,6 +61,7 @@ type LangfuseAuditMetadata struct {
 	// Client identity (masked)
 	ResolvedClientIP string `json:"resolved_client_ip,omitempty"`
 	MaskedTokenKey   string `json:"masked_token_key,omitempty"`
+	TokenName        string `json:"token_name,omitempty"`
 	Username         string `json:"username,omitempty"`
 	UserId           int    `json:"user_id"`
 
@@ -193,6 +194,7 @@ func DeriveLangfuseMetadata(relayInfo *relaycommon.RelayInfo, c *gin.Context) La
 		}
 		meta.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
 		meta.Username = c.GetString("username")
+		meta.TokenName = c.GetString("token_name")
 		// use_channel is the ordered list of channel IDs attempted for this
 		// request (including retries). It is the canonical "retry chain".
 		if chain := c.GetStringSlice("use_channel"); len(chain) > 0 {

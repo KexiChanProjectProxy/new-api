@@ -344,13 +344,20 @@ func buildLangfuseIngestionBody(snapshot *LangfuseAuditSnapshot) ([]byte, error)
 	startStr := snapshot.Metadata.StartTime.UTC().Format("2006-01-02T15:04:05.000Z")
 
 	meta := map[string]any{
-		"model":      snapshot.Metadata.ModelName,
-		"group":      snapshot.Metadata.GroupName,
-		"channel_id": snapshot.Metadata.ChannelId,
-		"request_id": snapshot.Metadata.RequestId,
-		"client_ip":  snapshot.Metadata.ResolvedClientIP,
-		"is_stream":  snapshot.Metadata.IsStream,
-		"source":     "new-api",
+		"model":             snapshot.Metadata.ModelName,
+		"group":             snapshot.Metadata.GroupName,
+		"channel_id":        snapshot.Metadata.ChannelId,
+		"request_id":        snapshot.Metadata.RequestId,
+		"client_ip":         snapshot.Metadata.ResolvedClientIP,
+		"username":          snapshot.Metadata.Username,
+		"token_name":        snapshot.Metadata.TokenName,
+		"token_key":         snapshot.Metadata.MaskedTokenKey,
+		"prompt_tokens":     snapshot.Metadata.PromptTokens,
+		"completion_tokens": snapshot.Metadata.CompletionTokens,
+		"total_tokens":      snapshot.Metadata.TotalTokens,
+		"quota":             snapshot.Metadata.Quota,
+		"is_stream":         snapshot.Metadata.IsStream,
+		"source":            "new-api",
 	}
 
 	body := struct {
@@ -375,12 +382,12 @@ func buildLangfuseIngestionBody(snapshot *LangfuseAuditSnapshot) ([]byte, error)
 				"timestamp": nowStr,
 				"type":      "generation-create",
 				"body": map[string]any{
-					"id":              genID,
-					"traceId":         traceID,
-					"name":            "relay-request",
-					"startTime":       startStr,
-					"endTime":         nowStr,
-					"model":           snapshot.Metadata.ModelName,
+					"id":        genID,
+					"traceId":   traceID,
+					"name":      "relay-request",
+					"startTime": startStr,
+					"endTime":   nowStr,
+					"model":     snapshot.Metadata.ModelName,
 					"modelParameters": map[string]any{
 						"relay_format": snapshot.Metadata.RelayFormat,
 						"is_stream":    snapshot.Metadata.IsStream,
