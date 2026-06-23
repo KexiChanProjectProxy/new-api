@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -23,9 +26,9 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/network_setting"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/setting/network_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
@@ -190,7 +193,6 @@ func main() {
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 
-
 	// Apply trusted proxy configuration before router setup
 	networkCfg := network_setting.GetNetworkSetting()
 
@@ -219,9 +221,36 @@ func main() {
 	// Log startup success message
 	common.LogStartupSuccess(startTime, addr)
 
-	err = server.Run(addr)
-	if err != nil {
-		common.FatalLog("failed to start HTTP server: " + err.Error())
+	service.StartLangfuseExporter()
+
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: server,
+	}
+	go func() {
+		common.SysLog("HTTP server listening on " + addr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			common.FatalLog("failed to start HTTP server: " + err.Error())
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+	common.SysLog(fmt.Sprintf("received signal %s, shutting down", sig))
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		common.SysError("HTTP server shutdown error: " + err.Error())
+	} else {
+		common.SysLog("HTTP server shut down cleanly")
+	}
+
+	if err := service.FlushLangfuse(); err != nil {
+		common.SysError("langfuse flush did not complete cleanly: " + err.Error())
+	} else {
+		common.SysLog("langfuse exporter flushed")
 	}
 }
 
