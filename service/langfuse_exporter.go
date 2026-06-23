@@ -33,7 +33,7 @@ import (
 // array) to match Langfuse's OTLP/HTTP ingest contract while keeping the
 // emission layer (Task 5) free to populate the per-observation fields.
 const (
-	langfuseOtelPath            = "/api/public/otel"
+	langfuseOtelPath            = "/api/public/otel/v1/traces"
 	langfuseIngestionVersionHdr = "x-langfuse-ingestion-version"
 	langfuseIngestionVersionVal = "4"
 	langfuseContentType         = "application/json"
