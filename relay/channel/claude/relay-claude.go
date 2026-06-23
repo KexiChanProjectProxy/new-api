@@ -537,7 +537,7 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 	for _, message := range claudeResponse.Content {
 		switch message.Type {
 		case "tool_use":
-			args, _ := json.Marshal(message.Input)
+			args, _ := common.Marshal(message.Input)
 			tools = append(tools, dto.ToolCallResponse{
 				ID:   message.Id,
 				Type: "function", // compatible with other OpenAI derivative applications
@@ -585,6 +585,35 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+
+	// streamingToolCallID / streamingToolCallName / streamingToolCallArgs are used to
+	// accumulate tool_use content blocks from stream chunks for Langfuse audit capture.
+	// Content blocks arrive sequentially, so only one active tool call is tracked at a time.
+	// On content_block_stop the accumulated data is finalized into completedToolCalls.
+	streamingToolCallID   string
+	streamingToolCallName string
+	streamingToolCallArgs strings.Builder
+	CompletedToolCalls    []dto.ToolCallResponse
+}
+
+// finalizeToolCall finalizes the current in-progress tool_use accumulation (if any)
+// and appends it to CompletedToolCalls. Safe to call when no tool call is active.
+func (ci *ClaudeResponseInfo) finalizeToolCall() {
+	if ci.streamingToolCallID == "" {
+		return
+	}
+	tc := dto.ToolCallResponse{
+		ID:   ci.streamingToolCallID,
+		Type: "function",
+		Function: dto.FunctionResponse{
+			Name:      ci.streamingToolCallName,
+			Arguments: ci.streamingToolCallArgs.String(),
+		},
+	}
+	ci.CompletedToolCalls = append(ci.CompletedToolCalls, tc)
+	ci.streamingToolCallID = ""
+	ci.streamingToolCallName = ""
+	ci.streamingToolCallArgs.Reset()
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {

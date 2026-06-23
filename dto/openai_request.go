@@ -464,7 +464,7 @@ func (m *Message) ParseToolCalls() []ToolCallRequest {
 }
 
 func (m *Message) SetToolCalls(toolCalls any) {
-	toolCallsJson, _ := json.Marshal(toolCalls)
+	toolCallsJson, _ := common.Marshal(toolCalls)
 	m.ToolCalls = toolCallsJson
 }
 
