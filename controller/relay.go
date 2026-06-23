@@ -123,6 +123,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	// Build the Langfuse audit snapshot at the earliest point after request
+	// validation and relay info generation. This captures the validated
+	// client-visible request DTO BEFORE upstream conversion and param
+	// overrides. If Langfuse is disabled or the snapshot fails to build,
+	// langfuseSnapshot is nil and emission is a no-op.
+	if langfuseSnapshot, langfuseErr := service.BuildLangfuseAudit(relayInfo, c); langfuseErr == nil {
+		relayInfo.LangfuseSnapshot = langfuseSnapshot
+	} else {
+		// Log the failure at debug level — a broken audit snapshot must
+		// never block the relay request.
+		logger.LogInfo(c, fmt.Sprintf("langfuse: failed to build audit snapshot: %s", langfuseErr.Error()))
+	}
+
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
@@ -171,6 +184,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
+			if relayInfo.LangfuseSnapshot != nil {
+				errBytes, _ := common.Marshal(newAPIError)
+				service.EmitLangfuseAuditFromSink(relayInfo.LangfuseSnapshot, 0, 0, 0, 0, errBytes)
+			}
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
 			}

@@ -374,6 +374,8 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+	EmitLangfuseAuditFromSink(relayInfo.LangfuseSnapshot,
+		usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, quota, nil)
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))
 	})

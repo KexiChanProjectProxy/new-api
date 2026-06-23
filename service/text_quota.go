@@ -473,6 +473,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+	EmitLangfuseAuditFromSink(relayInfo.LangfuseSnapshot,
+		summary.PromptTokens, summary.CompletionTokens, summary.TotalTokens, summary.Quota, nil)
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
 	})
