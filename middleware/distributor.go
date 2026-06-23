@@ -131,10 +131,11 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:        c,
-						ModelName:  modelRequest.Model,
-						TokenGroup: usingGroup,
-						Retry:      common.GetPointer(0),
+						Ctx:         c,
+						ModelName:   modelRequest.Model,
+						TokenGroup:  usingGroup,
+						Retry:       common.GetPointer(0),
+						RelayFormat: inferRelayFormatFromPath(c.Request.URL.Path),
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -486,4 +487,37 @@ func extractModelNameFromGeminiPath(path string) string {
 
 	// 返回模型名部分
 	return path[startIndex : startIndex+colonIndex]
+}
+
+// inferRelayFormatFromPath determines the relay format from the request URL path.
+// Used in channel selection to filter channels by native format compatibility
+// when pass-through body mode is enabled.
+func inferRelayFormatFromPath(path string) types.RelayFormat {
+	p := strings.TrimPrefix(path, "/v1")
+	p = strings.TrimPrefix(p, "/v1beta")
+	switch {
+	case strings.HasPrefix(p, "/messages"):
+		return types.RelayFormatClaude
+	case strings.HasPrefix(p, "/chat/completions"), strings.HasPrefix(p, "/completions"):
+		return types.RelayFormatOpenAI
+	case strings.HasPrefix(p, "/responses/compact"):
+		return types.RelayFormatOpenAIResponsesCompaction
+	case strings.HasPrefix(p, "/responses"):
+		return types.RelayFormatOpenAIResponses
+	case strings.HasPrefix(p, "/realtime"):
+		return types.RelayFormatOpenAIRealtime
+	case strings.HasPrefix(p, "/images/generations"), strings.HasPrefix(p, "/images/edits"), strings.HasPrefix(p, "/edits"):
+		return types.RelayFormatOpenAIImage
+	case strings.HasPrefix(p, "/audio/"):
+		return types.RelayFormatOpenAIAudio
+	case strings.HasPrefix(p, "/embeddings"):
+		return types.RelayFormatEmbedding
+	case strings.HasPrefix(p, "/rerank"):
+		return types.RelayFormatRerank
+	case strings.HasPrefix(p, "/moderations"):
+		return types.RelayFormatOpenAI
+	case strings.HasPrefix(p, "/models/"), strings.HasPrefix(p, "/engines/"):
+		return types.RelayFormatGemini
+	}
+	return ""
 }
