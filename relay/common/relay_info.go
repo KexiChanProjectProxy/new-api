@@ -56,6 +56,21 @@ type BuildInToolInfo struct {
 	SearchContextSize string
 }
 
+// LangfuseSnapshotSink is implemented by *service.LangfuseAuditSnapshot.
+// It is declared here as an interface (mirroring the BillingSettler pattern)
+// because the service package already imports relay/common; declaring the
+// concrete struct type on RelayInfo would create an import cycle.
+//
+// Relay handlers call these methods to capture the FINAL client-visible
+// response payload (after format conversion / usage patching, before
+// billing/logging runs). Per-token SSE deltas MUST NOT be forwarded — only
+// the single accumulated terminal payload.
+type LangfuseSnapshotSink interface {
+	SetResponsePayload(body []byte)
+	SetResponsePayloadFromString(body string)
+	SetBinaryResponse(contentType string, body []byte, omittedReason string)
+}
+
 type ResponsesUsageInfo struct {
 	BuiltInTools map[string]*BuildInToolInfo
 }
@@ -183,6 +198,11 @@ type RelayInfo struct {
 	FinalRequestRelayFormat types.RelayFormat
 
 	StreamStatus *StreamStatus
+
+	// LangfuseSnapshot, when non-nil, receives the final client-visible
+	// response payload for Langfuse audit capture. Handlers MUST set it
+	// AFTER format conversion / usage patching but BEFORE billing/logging.
+	LangfuseSnapshot LangfuseSnapshotSink
 
 	ThinkingContentInfo
 	TokenCountMeta
