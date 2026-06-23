@@ -1394,6 +1394,11 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	}
 
+	// Langfuse audit: capture accumulated stream text content.
+	if info.LangfuseSnapshot != nil && responseText.Len() > 0 {
+		info.LangfuseSnapshot.SetResponsePayloadFromString(responseText.String())
+	}
+
 	return usage, nil
 }
 
@@ -1572,6 +1577,11 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+
+	// Langfuse audit: capture the final response payload after format conversion.
+	if info.LangfuseSnapshot != nil && len(responseBody) > 0 {
+		info.LangfuseSnapshot.SetResponsePayload(responseBody)
+	}
 
 	return &usage, nil
 }
