@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -103,8 +104,13 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	return channelQuery, nil
 }
 
-func GetChannel(group string, model string, retry int) (*Channel, error) {
+func GetChannel(group string, model string, retry int, relayFormat ...types.RelayFormat) (*Channel, error) {
 	var abilities []Ability
+
+	var rf types.RelayFormat
+	if len(relayFormat) > 0 {
+		rf = relayFormat[0]
+	}
 
 	var err error = nil
 	channelQuery, err := getChannelQuery(group, model, retry)
@@ -119,28 +125,53 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	channel := Channel{}
-	if len(abilities) > 0 {
-		// Randomly choose one
-		weightSum := uint(0)
-		for _, ability_ := range abilities {
-			weightSum += ability_.Weight + 10
-		}
-		// Randomly choose one
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+
+	weightSum := uint(0)
+	for _, ability_ := range abilities {
+		weightSum += ability_.Weight + 10
+	}
+
+	totalTries := 0
+	for totalTries < len(abilities) {
 		weight := common.GetRandomInt(int(weightSum))
+		selectedId := 0
 		for _, ability_ := range abilities {
 			weight -= int(ability_.Weight) + 10
-			//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
 			if weight <= 0 {
-				channel.Id = ability_.ChannelId
+				selectedId = ability_.ChannelId
 				break
 			}
 		}
-	} else {
-		return nil, nil
+		if selectedId == 0 {
+			selectedId = abilities[len(abilities)-1].ChannelId
+		}
+
+		channel := Channel{}
+		err = DB.First(&channel, "id = ?", selectedId).Error
+		if err != nil {
+			return nil, err
+		}
+
+		if !shouldSkipChannelOnPassthrough(&channel, rf) {
+			return &channel, nil
+		}
+
+		for i, ability_ := range abilities {
+			if ability_.ChannelId == selectedId {
+				abilities = append(abilities[:i], abilities[i+1:]...)
+				weightSum = 0
+				for _, a := range abilities {
+					weightSum += a.Weight + 10
+				}
+				break
+			}
+		}
+		totalTries++
 	}
-	err = DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+	return nil, nil
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

@@ -11,8 +11,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
@@ -94,10 +96,73 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+// isNativeFormatSupported checks if a channel type natively supports a given relay format
+// without requiring body conversion. When pass-through is enabled on a channel, the request
+// body is sent as-is, so the channel can only handle formats its upstream API natively understands.
+func isNativeFormatSupported(channelType int, relayFormat types.RelayFormat) bool {
+	switch channelType {
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeAzure, constant.ChannelTypeSora,
+		constant.ChannelTypeCodex:
+		return relayFormat == types.RelayFormatOpenAI ||
+			relayFormat == types.RelayFormatOpenAIResponses ||
+			relayFormat == types.RelayFormatOpenAIResponsesCompaction ||
+			relayFormat == types.RelayFormatOpenAIAudio ||
+			relayFormat == types.RelayFormatOpenAIImage ||
+			relayFormat == types.RelayFormatOpenAIRealtime ||
+			relayFormat == types.RelayFormatEmbedding
+	case constant.ChannelTypeAnthropic:
+		return relayFormat == types.RelayFormatClaude
+	case constant.ChannelTypeGemini, constant.ChannelTypeVertexAi:
+		return relayFormat == types.RelayFormatGemini
+	case constant.ChannelTypeDeepSeek:
+		return relayFormat == types.RelayFormatOpenAI || relayFormat == types.RelayFormatClaude
+	case constant.ChannelTypeAli:
+		return relayFormat == types.RelayFormatOpenAI ||
+			relayFormat == types.RelayFormatClaude ||
+			relayFormat == types.RelayFormatOpenAIResponses ||
+			relayFormat == types.RelayFormatOpenAIImage ||
+			relayFormat == types.RelayFormatEmbedding
+	case constant.ChannelTypeCohere:
+		return relayFormat == types.RelayFormatRerank
+	case constant.ChannelTypeJina:
+		return relayFormat == types.RelayFormatRerank || relayFormat == types.RelayFormatEmbedding
+	default:
+		// Most other channel types (DeepSeek, Moonshot, SiliconFlow, Perplexity, etc.)
+		// speak the OpenAI-compatible protocol natively.
+		return relayFormat == types.RelayFormatOpenAI ||
+			relayFormat == types.RelayFormatOpenAIResponses ||
+			relayFormat == types.RelayFormatOpenAIImage ||
+			relayFormat == types.RelayFormatOpenAIAudio ||
+			relayFormat == types.RelayFormatEmbedding
+	}
+}
+
+// shouldSkipChannelOnPassthrough checks whether a channel should be excluded from selection
+// when pass-through body mode is active and the channel's type cannot natively handle the
+// given relay format.
+func shouldSkipChannelOnPassthrough(channel *Channel, relayFormat types.RelayFormat) bool {
+	if relayFormat == "" {
+		return false
+	}
+	setting := dto.ChannelSettings{}
+	if channel.Setting != nil && *channel.Setting != "" {
+		_ = common.Unmarshal([]byte(*channel.Setting), &setting)
+	}
+	if !setting.PassThroughBodyEnabled {
+		return false
+	}
+	return !isNativeFormatSupported(channel.Type, relayFormat)
+}
+
+func GetRandomSatisfiedChannel(group string, model string, retry int, relayFormat ...types.RelayFormat) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannel(group, model, retry, relayFormat...)
+	}
+
+	var rf types.RelayFormat
+	if len(relayFormat) > 0 {
+		rf = relayFormat[0]
 	}
 
 	channelSyncLock.RLock()
@@ -116,15 +181,30 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 		return nil, nil
 	}
 
-	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
+	filtered := channels
+	if rf != "" {
+		filtered = make([]int, 0, len(channels))
+		for _, channelId := range channels {
+			if ch, ok := channelsIDM[channelId]; ok {
+				if !shouldSkipChannelOnPassthrough(ch, rf) {
+					filtered = append(filtered, channelId)
+				}
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, nil
+		}
+	}
+
+	if len(filtered) == 1 {
+		if channel, ok := channelsIDM[filtered[0]]; ok {
 			return channel, nil
 		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
+		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", filtered[0])
 	}
 
 	uniquePriorities := make(map[int]bool)
-	for _, channelId := range channels {
+	for _, channelId := range filtered {
 		if channel, ok := channelsIDM[channelId]; ok {
 			uniquePriorities[int(channel.GetPriority())] = true
 		} else {
@@ -145,7 +225,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	// get the priority for the given retry number
 	var sumWeight = 0
 	var targetChannels []*Channel
-	for _, channelId := range channels {
+	for _, channelId := range filtered {
 		if channel, ok := channelsIDM[channelId]; ok {
 			if channel.GetPriority() == targetPriority {
 				sumWeight += channel.GetWeight()
