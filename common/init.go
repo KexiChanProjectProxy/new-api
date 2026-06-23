@@ -129,6 +129,12 @@ func InitEnv() {
 	SearchRateLimitEnable = GetEnvOrDefaultBool("SEARCH_RATE_LIMIT_ENABLE", true)
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
 	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
+
+	// Langfuse request-log env vars (override-able by OptionMap at runtime)
+	LangfuseRequestLogEnabled = GetEnvOrDefaultBool("LANGFUSE_REQUEST_LOG_ENABLED", false)
+	LangfuseRequestLogBaseURL = GetEnvOrDefaultString("LANGFUSE_REQUEST_LOG_BASE_URL", "")
+	LangfuseRequestLogPublicKey = GetEnvOrDefaultString("LANGFUSE_REQUEST_LOG_PUBLIC_KEY", "")
+	LangfuseRequestLogSecretKey = GetEnvOrDefaultString("LANGFUSE_REQUEST_LOG_SECRET_KEY", "")
 	initConstantEnv()
 }
 
