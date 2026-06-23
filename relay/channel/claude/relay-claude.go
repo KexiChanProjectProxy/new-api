@@ -768,6 +768,11 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			if claudeResponse.Delta.Thinking != nil {
 				claudeInfo.ResponseText.WriteString(*claudeResponse.Delta.Thinking)
 			}
+			if claudeResponse.Delta.Type == "input_json_delta" && claudeResponse.Delta.PartialJson != nil {
+				if claudeInfo.streamingToolCallID != "" {
+					claudeInfo.streamingToolCallArgs.WriteString(*claudeResponse.Delta.PartialJson)
+				}
+			}
 		}
 	} else if claudeResponse.Type == "message_delta" {
 		// 最终的usage获取
@@ -798,6 +803,19 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 		// 判断是否完整
 		claudeInfo.Done = true
 	} else if claudeResponse.Type == "content_block_start" {
+		if claudeResponse.ContentBlock != nil && claudeResponse.ContentBlock.Type == "tool_use" {
+			claudeInfo.finalizeToolCall()
+			claudeInfo.streamingToolCallID = claudeResponse.ContentBlock.Id
+			claudeInfo.streamingToolCallName = claudeResponse.ContentBlock.Name
+			claudeInfo.streamingToolCallArgs.Reset()
+			if claudeResponse.ContentBlock.Input != nil {
+				if inputJSON, err := common.Marshal(claudeResponse.ContentBlock.Input); err == nil {
+					claudeInfo.streamingToolCallArgs.Write(inputJSON)
+				}
+			}
+		}
+	} else if claudeResponse.Type == "content_block_stop" {
+		claudeInfo.finalizeToolCall()
 	} else {
 		return false
 	}
@@ -916,13 +934,42 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
 
-	// Langfuse audit: capture the full accumulated stream output text
-	// (all content chunks combined, not just the final delta event).
-	if info.LangfuseSnapshot != nil && claudeInfo.ResponseText.Len() > 0 {
-		info.LangfuseSnapshot.SetResponsePayloadFromString(claudeInfo.ResponseText.String())
+	// Langfuse audit: capture the full accumulated stream output as structured JSON
+	// (text content + tool calls combined, not just the final delta event).
+	if info.LangfuseSnapshot != nil {
+		payload := buildClaudeStreamingLangfusePayload(claudeInfo)
+		if payload != nil {
+			info.LangfuseSnapshot.SetResponsePayload(payload)
+		} else if claudeInfo.ResponseText.Len() > 0 {
+			info.LangfuseSnapshot.SetResponsePayloadFromString(claudeInfo.ResponseText.String())
+		}
 	}
 
 	return claudeInfo.Usage, nil
+}
+
+// buildClaudeStreamingLangfusePayload builds a structured JSON payload for Langfuse
+// audit from accumulated stream data, combining text content and tool calls into a
+// single JSON object. Returns nil when there is no data to emit.
+func buildClaudeStreamingLangfusePayload(ci *ClaudeResponseInfo) []byte {
+	result := make(map[string]any)
+
+	if ci.ResponseText.Len() > 0 {
+		result["content"] = ci.ResponseText.String()
+	}
+	if len(ci.CompletedToolCalls) > 0 {
+		result["tool_calls"] = ci.CompletedToolCalls
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+
+	payload, err := common.Marshal(result)
+	if err != nil {
+		return nil
+	}
+	return payload
 }
 
 func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, httpResp *http.Response, data []byte) *types.NewAPIError {
@@ -953,7 +1000,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	case types.RelayFormatOpenAI:
 		openaiResponse := ResponseClaude2OpenAI(&claudeResponse)
 		openaiResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
-		responseData, err = json.Marshal(openaiResponse)
+		responseData, err = common.Marshal(openaiResponse)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
