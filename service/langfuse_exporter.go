@@ -17,6 +17,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/google/uuid"
 )
 
 // Langfuse OTLP/HTTP ingestion constants.
@@ -28,15 +29,13 @@ import (
 //	x-langfuse-ingestion-version: 4
 //
 // This transport deliberately avoids any OpenTelemetry SDK dependency — it
-// shapes a minimal JSON body and POSTs it via net/http. The body schema is
-// intentionally permissive (top-level object wrapping an `observations`
-// array) to match Langfuse's OTLP/HTTP ingest contract while keeping the
-// emission layer (Task 5) free to populate the per-observation fields.
+// shapes a minimal JSON body and POSTs it via net/http to Langfuse's Ingestion
+// API (/api/public/ingestion). Unlike the OTLP endpoint, this API accepts
+// structured trace/generation events directly and renders them immediately
+// in the Langfuse UI.
 const (
-	langfuseOtelPath            = "/api/public/otel/v1/traces"
-	langfuseIngestionVersionHdr = "x-langfuse-ingestion-version"
-	langfuseIngestionVersionVal = "4"
-	langfuseContentType         = "application/json"
+	langfuseIngestionPath = "/api/public/ingestion"
+	langfuseContentType   = "application/json"
 
 	// langfuseEmitTimeout caps a single POST attempt. Langfuse ingest is
 	// fire-and-forget from the gateway's perspective; we never want a slow
@@ -72,7 +71,7 @@ func (c langfuseConfig) endpoint() string {
 	if base == "" {
 		return ""
 	}
-	return base + langfuseOtelPath
+	return base + langfuseIngestionPath
 }
 
 // authHeader returns the HTTP Basic Authorization value (with scheme prefix)
@@ -268,7 +267,6 @@ func (e *langfuseExporter) emit(ctx context.Context, cfg langfuseConfig, body []
 	}
 	req.Header.Set("Content-Type", langfuseContentType)
 	req.Header.Set("Authorization", auth)
-	req.Header.Set(langfuseIngestionVersionHdr, langfuseIngestionVersionVal)
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
@@ -284,15 +282,130 @@ func (e *langfuseExporter) emit(ctx context.Context, cfg langfuseConfig, body []
 	return nil
 }
 
-// EmitLangfuseAudit is the public emission entry point. It wraps the snapshot
-// into the OTLP/HTTP body and POSTs it. It is a no-op (returns nil) when the
-// exporter is disabled or not started, so Task 5 can call it unconditionally
-// from the terminal relay paths without guarding.
+// buildLangfuseIngestionBody marshals the snapshot into a Langfuse Ingestion
+// API batch body. Each relay request produces one trace-create and one
+// generation-create event so the full request/response is visible in the
+// Langfuse UI as a single trace with a generation observation.
 //
-// The body schema is a minimal OTLP/HTTP-shaped object. The `observations`
-// array contains exactly one element carrying the snapshot JSON. This keeps
-// the transport layer decoupled from the per-observation field layout (which
-// Task 5 owns) while satisfying Langfuse's ingest contract.
+// Body shape:
+//
+//	{
+//	  "batch": [
+//	    { "id": "...", "timestamp": "...", "type": "trace-create",
+//	      "body": { "id": "...", "name": "new-api-request", ... } },
+//	    { "id": "...", "timestamp": "...", "type": "generation-create",
+//	      "body": { "id": "...", "traceId": "...", "model": "...",
+//	                "input": ..., "output": ..., "usage": {...} } }
+//	  ]
+//	}
+func buildLangfuseIngestionBody(snapshot *LangfuseAuditSnapshot) ([]byte, error) {
+	now := time.Now().UTC()
+	traceID := "newapi-" + snapshot.Metadata.RequestId
+	if traceID == "newapi-" {
+		traceID = fmt.Sprintf("newapi-%d", now.UnixNano())
+	}
+	genID := traceID + "-gen"
+
+	// Parse request payload from JSON for structured display.
+	var input any = snapshot.RequestPayload
+	if len(snapshot.RequestPayload) > 0 {
+		var parsed any
+		if common.Unmarshal(snapshot.RequestPayload, &parsed) == nil {
+			input = parsed
+		}
+	}
+
+	// Build output: error first, then response, then binary placeholder.
+	var output any
+	level := "DEFAULT"
+	var statusMessage *string
+	if len(snapshot.ErrorPayload) > 0 {
+		level = "ERROR"
+		s := "relay request failed"
+		statusMessage = &s
+		var parsed any
+		if common.Unmarshal(snapshot.ErrorPayload, &parsed) == nil {
+			output = parsed
+		} else {
+			output = string(snapshot.ErrorPayload)
+		}
+	} else if len(snapshot.ResponsePayload) > 0 {
+		var parsed any
+		if common.Unmarshal(snapshot.ResponsePayload, &parsed) == nil {
+			output = parsed
+		} else {
+			output = string(snapshot.ResponsePayload)
+		}
+	} else if snapshot.BinaryResponse != nil {
+		output = snapshot.BinaryResponse
+	}
+
+	nowStr := now.Format("2006-01-02T15:04:05.000Z")
+	startStr := snapshot.Metadata.StartTime.UTC().Format("2006-01-02T15:04:05.000Z")
+
+	meta := map[string]any{
+		"model":      snapshot.Metadata.ModelName,
+		"group":      snapshot.Metadata.GroupName,
+		"channel_id": snapshot.Metadata.ChannelId,
+		"request_id": snapshot.Metadata.RequestId,
+		"client_ip":  snapshot.Metadata.ResolvedClientIP,
+		"is_stream":  snapshot.Metadata.IsStream,
+		"source":     "new-api",
+	}
+
+	body := struct {
+		Batch []any `json:"batch"`
+	}{
+		Batch: []any{
+			map[string]any{
+				"id":        uuid.New().String(),
+				"timestamp": nowStr,
+				"type":      "trace-create",
+				"body": map[string]any{
+					"id":       traceID,
+					"name":     "new-api-relay-request",
+					"userId":   fmt.Sprintf("%d", snapshot.Metadata.UserId),
+					"metadata": meta,
+					"input":    input,
+					"output":   output,
+				},
+			},
+			map[string]any{
+				"id":        uuid.New().String(),
+				"timestamp": nowStr,
+				"type":      "generation-create",
+				"body": map[string]any{
+					"id":              genID,
+					"traceId":         traceID,
+					"name":            "relay-request",
+					"startTime":       startStr,
+					"endTime":         nowStr,
+					"model":           snapshot.Metadata.ModelName,
+					"modelParameters": map[string]any{
+						"relay_format": snapshot.Metadata.RelayFormat,
+						"is_stream":    snapshot.Metadata.IsStream,
+					},
+					"input":         input,
+					"output":        output,
+					"level":         level,
+					"statusMessage": statusMessage,
+					"usage": map[string]any{
+						"input":  snapshot.Metadata.PromptTokens,
+						"output": snapshot.Metadata.CompletionTokens,
+						"unit":   "TOKENS",
+					},
+					"version": "1",
+				},
+			},
+		},
+	}
+	return common.Marshal(&body)
+}
+
+// EmitLangfuseAudit is the public emission entry point. It wraps the snapshot
+// into an Ingestion API batch body and POSTs it. It is a no-op (returns nil)
+// when the exporter is disabled or not started, so Task 5 can call it
+// unconditionally from the terminal relay paths without guarding.
 func EmitLangfuseAudit(snapshot *LangfuseAuditSnapshot) error {
 	if snapshot == nil {
 		return nil
@@ -303,7 +416,7 @@ func EmitLangfuseAudit(snapshot *LangfuseAuditSnapshot) error {
 		return nil
 	}
 
-	body, err := buildLangfuseObservationBody(snapshot)
+	body, err := buildLangfuseIngestionBody(snapshot)
 	if err != nil {
 		return fmt.Errorf("langfuse: marshal body: %w", err)
 	}
@@ -355,26 +468,4 @@ func EmitLangfuseAuditFromSink(sink relaycommon.LangfuseSnapshotSink, prompt, co
 	gopool.Go(func() {
 		_ = EmitLangfuseAudit(snapshot)
 	})
-}
-
-// buildLangfuseObservationBody marshals the snapshot into the OTLP/HTTP body
-// Langfuse expects. We use the wrapper common.Marshal per project Rule 1.
-//
-// Body shape:
-//
-//	{
-//	  "observations": [
-//	    { ...snapshot fields... }
-//	  ]
-//	}
-//
-// The snapshot struct already carries JSON tags, so embedding it directly
-// preserves the field names downstream consumers expect.
-func buildLangfuseObservationBody(snapshot *LangfuseAuditSnapshot) ([]byte, error) {
-	wrapper := struct {
-		Observations []*LangfuseAuditSnapshot `json:"observations"`
-	}{
-		Observations: []*LangfuseAuditSnapshot{snapshot},
-	}
-	return common.Marshal(wrapper)
 }

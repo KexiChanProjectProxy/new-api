@@ -61,7 +61,6 @@ func newCaptureServer(t *testing.T, status int) (*httptest.Server, *captureState
 		st.calls = append(st.calls, capturedCall{
 			path:   r.URL.Path,
 			auth:   r.Header.Get("Authorization"),
-			iv:     r.Header.Get(langfuseIngestionVersionHdr),
 			ct:     r.Header.Get("Content-Type"),
 			body:   body,
 			status: status,
@@ -83,7 +82,6 @@ type captureState struct {
 type capturedCall struct {
 	path   string
 	auth   string
-	iv     string
 	ct     string
 	body   []byte
 	status int
@@ -159,14 +157,11 @@ func TestLangfuseHotReloadRebuildsExporter(t *testing.T) {
 	if calls2[0].auth != wantAuth {
 		t.Errorf("auth after reload = %q, want %q", calls2[0].auth, wantAuth)
 	}
-	if calls2[0].iv != langfuseIngestionVersionVal {
-		t.Errorf("ingestion-version hdr = %q, want %q", calls2[0].iv, langfuseIngestionVersionVal)
-	}
 	if calls2[0].ct != langfuseContentType {
 		t.Errorf("content-type = %q, want %q", calls2[0].ct, langfuseContentType)
 	}
-	if calls2[0].path != langfuseOtelPath {
-		t.Errorf("path = %q, want %q", calls2[0].path, langfuseOtelPath)
+	if calls2[0].path != langfuseIngestionPath {
+		t.Errorf("path = %q, want %q", calls2[0].path, langfuseIngestionPath)
 	}
 }
 

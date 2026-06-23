@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -47,23 +46,69 @@ func TestLangfuseExportsNonStreamSuccess(t *testing.T) {
 	require.Len(t, calls, 1)
 
 	var body struct {
-		Observations []struct {
-			Metadata struct {
-				PromptTokens     int   `json:"prompt_tokens"`
-				CompletionTokens int   `json:"completion_tokens"`
-				TotalTokens      int   `json:"total_tokens"`
-				Quota            int   `json:"quota"`
-				TotalLatencyMs   int64 `json:"total_latency_ms"`
-			} `json:"metadata"`
-		} `json:"observations"`
+		Batch []struct {
+			Type string `json:"type"`
+			Body struct {
+				ID      string `json:"id"`
+				TraceID string `json:"traceId"`
+				Name    string `json:"name"`
+				Model   string `json:"model"`
+				Usage   struct {
+					Input  int    `json:"input"`
+					Output int    `json:"output"`
+					Unit   string `json:"unit"`
+				} `json:"usage"`
+				Metadata map[string]any `json:"metadata"`
+			} `json:"body"`
+		} `json:"batch"`
 	}
 	require.NoError(t, json.Unmarshal(calls[0].body, &body))
-	require.Len(t, body.Observations, 1)
-	require.Equal(t, 10, body.Observations[0].Metadata.PromptTokens)
-	require.Equal(t, 5, body.Observations[0].Metadata.CompletionTokens)
-	require.Equal(t, 15, body.Observations[0].Metadata.TotalTokens)
-	require.Equal(t, 1500, body.Observations[0].Metadata.Quota)
-	require.Greater(t, body.Observations[0].Metadata.TotalLatencyMs, int64(0), "latency must be finalized")
+	require.Len(t, body.Batch, 2, "batch must contain trace-create + generation-create")
+
+	// Find the generation event
+	var gen *struct {
+		ID      string `json:"id"`
+		TraceID string `json:"traceId"`
+		Name    string `json:"name"`
+		Model   string `json:"model"`
+		Usage   struct {
+			Input  int    `json:"input"`
+			Output int    `json:"output"`
+			Unit   string `json:"unit"`
+		} `json:"usage"`
+		Level         string `json:"level"`
+		StatusMessage any    `json:"statusMessage"`
+	}
+	for i := range body.Batch {
+		if body.Batch[i].Type == "generation-create" {
+			b := body.Batch[i]
+			gen = &struct {
+				ID      string `json:"id"`
+				TraceID string `json:"traceId"`
+				Name    string `json:"name"`
+				Model   string `json:"model"`
+				Usage   struct {
+					Input  int    `json:"input"`
+					Output int    `json:"output"`
+					Unit   string `json:"unit"`
+				} `json:"usage"`
+				Level         string `json:"level"`
+				StatusMessage any    `json:"statusMessage"`
+			}{
+				ID:      b.Body.ID,
+				TraceID: b.Body.TraceID,
+				Name:    b.Body.Name,
+				Model:   b.Body.Model,
+				Usage:   b.Body.Usage,
+			}
+			break
+		}
+	}
+	require.NotNil(t, gen, "must have a generation-create event")
+	require.Equal(t, "relay-request", gen.Name)
+	require.Equal(t, "gpt-4o", gen.Model)
+	require.Equal(t, 10, gen.Usage.Input)
+	require.Equal(t, 5, gen.Usage.Output)
 }
 
 // TestLangfuseRetryThenSuccessExportsSingleTerminalRecord verifies the core
@@ -132,26 +177,39 @@ func TestLangfuseExportsFinalClientErrorPayload(t *testing.T) {
 	calls := st.snapshot()
 	require.Len(t, calls, 1)
 
-	// ErrorPayload is a []byte field, which Go's encoding/json marshals as
-	// base64. We decode the whole observation to a struct that reads it as
-	// json.RawMessage (the base64 string), then base64-decode to recover
-	// the original error JSON.
 	var body struct {
-		Observations []struct {
-			ErrorPayloadStr string `json:"error_payload"`
-			Metadata        struct {
-				Quota       int `json:"quota"`
-				TotalTokens int `json:"total_tokens"`
-			} `json:"metadata"`
-		} `json:"observations"`
+		Batch []struct {
+			Type string `json:"type"`
+			Body struct {
+				ID     string `json:"id"`
+				Level  string `json:"level"`
+				Input  any    `json:"input"`
+				Output any    `json:"output"`
+				Usage  struct {
+					Input  int    `json:"input"`
+					Output int    `json:"output"`
+					Unit   string `json:"unit"`
+				} `json:"usage"`
+			} `json:"body"`
+		} `json:"batch"`
 	}
 	require.NoError(t, json.Unmarshal(calls[0].body, &body))
-	require.Len(t, body.Observations, 1)
+	require.Len(t, body.Batch, 2, "batch must contain trace-create + generation-create")
 
-	decoded, err := base64.StdEncoding.DecodeString(body.Observations[0].ErrorPayloadStr)
-	require.NoError(t, err, "error_payload must be valid base64")
-	require.Contains(t, string(decoded), "upstream 502", "decoded error payload must carry the message")
-	require.Equal(t, 0, body.Observations[0].Metadata.Quota, "quota must be 0 on failure")
+	// Find the generation event and verify it's ERROR level with output
+	var genLevel string
+	var genOutput any
+	var genUsageInput int
+	for _, b := range body.Batch {
+		if b.Type == "generation-create" {
+			genLevel = b.Body.Level
+			genOutput = b.Body.Output
+			genUsageInput = b.Body.Usage.Input
+		}
+	}
+	require.Equal(t, "ERROR", genLevel, "failure must have ERROR level")
+	require.NotNil(t, genOutput, "failure must have output (error payload)")
+	require.Equal(t, 0, genUsageInput, "usage must be 0 on failure")
 }
 
 // TestLangfuseIgnoresRelayTaskAndRealtimeScopes verifies the scope guard:
