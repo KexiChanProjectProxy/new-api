@@ -111,7 +111,7 @@ func TestLangfuseExportsOnlyFinalStreamOutcome(t *testing.T) {
 	require.NotNil(t, usage)
 
 	require.NotEmpty(t, snap.payload, "snapshot must capture the full accumulated stream output")
-	require.Equal(t, "he", string(snap.payload), "must contain the accumulated response text from all deltas")
+	require.Equal(t, `{"content":"he"}`, string(snap.payload), "must contain the accumulated response text from all deltas wrapped in structured JSON")
 }
 
 // TestLangfuseCapturesResponsesCompletedPayload verifies that

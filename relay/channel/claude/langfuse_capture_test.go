@@ -86,5 +86,5 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input
 	require.NotNil(t, usage)
 
 	require.NotEmpty(t, snap.payload, "snapshot must capture the full accumulated stream output")
-	require.Equal(t, "hel", string(snap.payload), "must contain the accumulated response text from all content_block_delta chunks")
+	require.Equal(t, `{"content":"hel"}`, string(snap.payload), "must contain the accumulated response text from all content_block_delta chunks wrapped in structured JSON")
 }
