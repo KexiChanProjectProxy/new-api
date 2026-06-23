@@ -74,7 +74,7 @@ func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	return nil
 }
 
-func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, responseTextBuilder *strings.Builder, toolCount *int) error {
+func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, responseTextBuilder *strings.Builder, toolCount *int, toolCallAcc map[int]*dto.ToolCallResponse) error {
 	for _, choice := range streamResponse.Choices {
 		responseTextBuilder.WriteString(choice.Delta.GetContentString())
 		responseTextBuilder.WriteString(choice.Delta.GetReasoningContent())
@@ -85,20 +85,43 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 			for _, tool := range choice.Delta.ToolCalls {
 				responseTextBuilder.WriteString(tool.Function.Name)
 				responseTextBuilder.WriteString(tool.Function.Arguments)
+
+				if toolCallAcc != nil {
+					idx := 0
+					if tool.Index != nil {
+						idx = *tool.Index
+					}
+					existing, ok := toolCallAcc[idx]
+					if !ok {
+						tc := tool
+						toolCallAcc[idx] = &tc
+					} else {
+						if tool.ID != "" {
+							existing.ID = tool.ID
+						}
+						if tool.Type != nil {
+							existing.Type = tool.Type
+						}
+						if tool.Function.Name != "" {
+							existing.Function.Name = tool.Function.Name
+						}
+						existing.Function.Arguments += tool.Function.Arguments
+					}
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int, toolCallAcc map[int]*dto.ToolCallResponse) error {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			return err
 		}
-		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
+		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount, toolCallAcc)
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {

@@ -121,6 +121,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	// toolCallAccumulator tracks partial tool call chunks from stream deltas
+	// so the Langfuse audit can emit structured JSON instead of raw concatenated text.
+	toolCallAccumulator := make(map[int]*dto.ToolCallResponse)
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -139,7 +142,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
-			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
+			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount, toolCallAccumulator); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			}
@@ -186,13 +189,50 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
-	// Langfuse audit: capture the full accumulated stream output text
-	// (all delta chunks combined, not just the final SSE event).
-	if info.LangfuseSnapshot != nil && responseTextBuilder.Len() > 0 {
-		info.LangfuseSnapshot.SetResponsePayloadFromString(responseTextBuilder.String())
+	// Langfuse audit: capture the full accumulated stream output as structured JSON
+	// (text content + tool calls combined from delta chunks, not just the final SSE event).
+	if info.LangfuseSnapshot != nil {
+		payload := buildOpenAIStreamingLangfusePayload(&responseTextBuilder, toolCallAccumulator)
+		if payload != nil {
+			info.LangfuseSnapshot.SetResponsePayload(payload)
+		} else if responseTextBuilder.Len() > 0 {
+			info.LangfuseSnapshot.SetResponsePayloadFromString(responseTextBuilder.String())
+		}
 	}
 
 	return usage, nil
+}
+
+// buildOpenAIStreamingLangfusePayload builds a structured JSON payload for Langfuse
+// audit from accumulated stream data. Combines text content and accumulated tool calls
+// into a single JSON object matching the non-streaming response shape.
+// Returns nil when there is no data to emit.
+func buildOpenAIStreamingLangfusePayload(textBuilder *strings.Builder, toolCalls map[int]*dto.ToolCallResponse) []byte {
+	result := make(map[string]any)
+
+	if textBuilder.Len() > 0 {
+		result["content"] = textBuilder.String()
+	}
+	if len(toolCalls) > 0 {
+		calls := make([]dto.ToolCallResponse, 0, len(toolCalls))
+		for idx := 0; idx < len(toolCalls); idx++ {
+			if tc, ok := toolCalls[idx]; ok {
+				calls = append(calls, *tc)
+			}
+		}
+		if len(calls) > 0 {
+			result["tool_calls"] = calls
+		}
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	payload, err := common.Marshal(result)
+	if err != nil {
+		return nil
+	}
+	return payload
 }
 
 func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
