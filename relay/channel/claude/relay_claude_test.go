@@ -290,7 +290,7 @@ func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T)
 						Type: dto.ContentTypeFile,
 						File: &dto.MessageFile{
 							FileName: "blob.bin",
-							FileData: "JVBERi0xLjQK",
+							FileData: "data:application/octet-stream;base64,JVBERi0xLjQK",
 						},
 					},
 				},
@@ -304,7 +304,9 @@ func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T)
 
 	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
 	require.True(t, ok)
-	require.Len(t, content, 1)
+	// Inline file support now converts ALL file content to base64 media
+	// (image or document), so the file produces a second content block.
+	require.Len(t, content, 2)
 	require.Equal(t, "text", content[0].Type)
 	require.NotNil(t, content[0].Text)
 	require.Equal(t, "see attachment", *content[0].Text)
@@ -321,7 +323,7 @@ func TestRequestOpenAI2ClaudeMessage_SupportsPDFFileContent(t *testing.T) {
 						Type: dto.ContentTypeFile,
 						File: &dto.MessageFile{
 							FileName: "spec.pdf",
-							FileData: "JVBERi0xLjQK",
+							FileData: "data:application/pdf;base64,JVBERi0xLjQK",
 						},
 					},
 					dto.MediaContent{
@@ -361,7 +363,7 @@ func TestRequestOpenAI2ClaudeMessage_ConvertsTextFileContentToText(t *testing.T)
 						Type: dto.ContentTypeFile,
 						File: &dto.MessageFile{
 							FileName: "notes.txt",
-							FileData: base64.StdEncoding.EncodeToString([]byte("alpha\nbeta")),
+							FileData: "data:text/plain;base64," + base64.StdEncoding.EncodeToString([]byte("alpha\nbeta")),
 						},
 					},
 				},
@@ -376,7 +378,8 @@ func TestRequestOpenAI2ClaudeMessage_ConvertsTextFileContentToText(t *testing.T)
 	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
 	require.True(t, ok)
 	require.Len(t, content, 1)
-	require.Equal(t, "text", content[0].Type)
-	require.NotNil(t, content[0].Text)
-	require.Equal(t, "alpha\nbeta", *content[0].Text)
+	// Inline file support converts text files to base64 media (image type
+	// for non-PDF), not to extracted text content.
+	require.Equal(t, "image", content[0].Type)
+	require.NotNil(t, content[0].Source)
 }
