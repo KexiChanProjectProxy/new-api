@@ -323,6 +323,10 @@ docker run --name new-api -d --restart always \
 | `MAX_REQUEST_BODY_MB` | リクエストボディ最大サイズ（MB、**解凍後**に計測。巨大リクエスト/zip bomb によるメモリ枯渇を防止）。超過時は `413` | `32` |
 | `AZURE_DEFAULT_API_VERSION` | Azure APIバージョン | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | エラーログスイッチ | `false` |
+| `LANGFUSE_REQUEST_LOG_ENABLED` | Langfuseリクエスト監査ログを有効化 | `false` |
+| `LANGFUSE_REQUEST_LOG_BASE_URL` | LangfuseベースURL（例: `https://cloud.langfuse.com`） | - |
+| `LANGFUSE_REQUEST_LOG_PUBLIC_KEY` | Langfuse公開鍵（Basic Authユーザー名） | - |
+| `LANGFUSE_REQUEST_LOG_SECRET_KEY` | Langfuse秘密鍵（Basic Authパスワード） | - |
 | `PYROSCOPE_URL` | Pyroscopeサーバーのアドレス | - |
 | `PYROSCOPE_APP_NAME` | Pyroscopeアプリ名 | `new-api` |
 | `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope Basic Authユーザー | - |

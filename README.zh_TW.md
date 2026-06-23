@@ -321,6 +321,10 @@ docker run --name new-api -d --restart always \
 | `MAX_REQUEST_BODY_MB` | 請求體最大大小（MB，**解壓縮後**計；防止超大請求/zip bomb 導致記憶體暴漲），超過將返回 `413` | `32` |
 | `AZURE_DEFAULT_API_VERSION` | Azure API 版本                                                 | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | 錯誤日誌開關                                                       | `false` |
+| `LANGFUSE_REQUEST_LOG_ENABLED` | 啟用 Langfuse 請求稽核日誌記錄                                    | `false` |
+| `LANGFUSE_REQUEST_LOG_BASE_URL` | Langfuse 基礎 URL（例如 `https://cloud.langfuse.com`）          | - |
+| `LANGFUSE_REQUEST_LOG_PUBLIC_KEY` | Langfuse 公鑰（Basic Auth 用戶名）                              | - |
+| `LANGFUSE_REQUEST_LOG_SECRET_KEY` | Langfuse 私鑰（Basic Auth 密碼）                                | - |
 | `PYROSCOPE_URL` | Pyroscope 服務位址                                            | - |
 | `PYROSCOPE_APP_NAME` | Pyroscope 應用名                                        | `new-api` |
 | `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope Basic Auth 用戶名                        | - |

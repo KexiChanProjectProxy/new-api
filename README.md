@@ -321,6 +321,10 @@ docker run --name new-api -d --restart always \
 | `MAX_REQUEST_BODY_MB` | Max request body size (MB, counted **after decompression**; prevents huge requests/zip bombs from exhausting memory). Exceeding it returns `413` | `32` |
 | `AZURE_DEFAULT_API_VERSION` | Azure API version | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | Error log switch | `false` |
+| `LANGFUSE_REQUEST_LOG_ENABLED` | Enable Langfuse request audit logging | `false` |
+| `LANGFUSE_REQUEST_LOG_BASE_URL` | Langfuse base URL (e.g. `https://cloud.langfuse.com`) | - |
+| `LANGFUSE_REQUEST_LOG_PUBLIC_KEY` | Langfuse public key (Basic Auth username) | - |
+| `LANGFUSE_REQUEST_LOG_SECRET_KEY` | Langfuse secret key (Basic Auth password) | - |
 | `PYROSCOPE_URL` | Pyroscope server address | - |
 | `PYROSCOPE_APP_NAME` | Pyroscope application name | `new-api` |
 | `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope basic auth user | - |
