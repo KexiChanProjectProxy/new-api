@@ -114,6 +114,11 @@ var MemoryCacheEnabled bool
 
 var LogConsumeEnabled = true
 
+var LangfuseRequestLogEnabled = false
+var LangfuseRequestLogBaseURL = ""
+var LangfuseRequestLogPublicKey = ""
+var LangfuseRequestLogSecretKey = ""
+
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
 

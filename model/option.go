@@ -74,6 +74,10 @@ func InitOptionMap() {
 	common.OptionMap["WorkerUrl"] = system_setting.WorkerUrl
 	common.OptionMap["WorkerValidKey"] = system_setting.WorkerValidKey
 	common.OptionMap["WorkerAllowHttpImageRequestEnabled"] = strconv.FormatBool(system_setting.WorkerAllowHttpImageRequestEnabled)
+	common.OptionMap["LangfuseRequestLogEnabled"] = strconv.FormatBool(common.LangfuseRequestLogEnabled)
+	common.OptionMap["LangfuseRequestLogBaseURL"] = common.LangfuseRequestLogBaseURL
+	common.OptionMap["LangfuseRequestLogPublicKey"] = common.LangfuseRequestLogPublicKey
+	common.OptionMap["LangfuseRequestLogSecretKey"] = common.LangfuseRequestLogSecretKey
 	common.OptionMap["PayAddress"] = ""
 	common.OptionMap["CustomCallbackAddress"] = ""
 	common.OptionMap["EpayId"] = ""
@@ -354,6 +358,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.SMTPForceAuthLogin = boolValue
 		case "WorkerAllowHttpImageRequestEnabled":
 			system_setting.WorkerAllowHttpImageRequestEnabled = boolValue
+		case "LangfuseRequestLogEnabled":
+			common.LangfuseRequestLogEnabled = boolValue
 		case "DefaultUseAutoGroup":
 			setting.DefaultUseAutoGroup = boolValue
 		case "ExposeRatioEnabled":
@@ -380,6 +386,12 @@ func updateOptionMap(key string, value string) (err error) {
 		system_setting.WorkerUrl = value
 	case "WorkerValidKey":
 		system_setting.WorkerValidKey = value
+	case "LangfuseRequestLogBaseURL":
+		common.LangfuseRequestLogBaseURL = value
+	case "LangfuseRequestLogPublicKey":
+		common.LangfuseRequestLogPublicKey = value
+	case "LangfuseRequestLogSecretKey":
+		common.LangfuseRequestLogSecretKey = value
 	case "PayAddress":
 		operation_setting.PayAddress = value
 	case "Chats":
