@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 export const CHANNEL_OPTIONS = [
-  { value: 1, color: 'green', label: 'OpenAI' },
+  { value: 1, color: 'green', label: 'OpenAI Chat' },
+  { value: 58, color: 'green', label: 'OpenAI Responses' },
   {
     value: 2,
     color: 'light-blue',
@@ -193,7 +194,7 @@ export const CHANNEL_OPTIONS = [
 
 // Channel types that support upstream model list fetching in UI.
 export const MODEL_FETCHABLE_CHANNEL_TYPES = new Set([
-  1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43,
+  1, 58, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43,
 ]);
 
 export const MODEL_TABLE_PAGE_SIZE = 10;
