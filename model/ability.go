@@ -155,7 +155,7 @@ func GetChannel(group string, model string, retry int, relayFormat ...types.Rela
 			return nil, err
 		}
 
-		if !shouldSkipChannelOnPassthrough(&channel, rf) {
+		if IsPassthroughFormatCompatible(channel.Type, isChannelPassthroughBodyEnabled(&channel), rf) {
 			return &channel, nil
 		}
 

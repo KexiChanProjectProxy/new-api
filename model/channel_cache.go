@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 )
@@ -101,8 +102,16 @@ func SyncChannelCache(frequency int) {
 // body is sent as-is, so the channel can only handle formats its upstream API natively understands.
 func isNativeFormatSupported(channelType int, relayFormat types.RelayFormat) bool {
 	switch channelType {
-	case constant.ChannelTypeOpenAI, constant.ChannelTypeAzure, constant.ChannelTypeSora,
-		constant.ChannelTypeCodex:
+	case constant.ChannelTypeOpenAI:
+		return relayFormat == types.RelayFormatOpenAI ||
+			relayFormat == types.RelayFormatOpenAIAudio ||
+			relayFormat == types.RelayFormatOpenAIImage ||
+			relayFormat == types.RelayFormatOpenAIRealtime ||
+			relayFormat == types.RelayFormatEmbedding
+	case constant.ChannelTypeOpenAIResponses:
+		return relayFormat == types.RelayFormatOpenAIResponses ||
+			relayFormat == types.RelayFormatOpenAIResponsesCompaction
+	case constant.ChannelTypeAzure, constant.ChannelTypeSora, constant.ChannelTypeCodex:
 		return relayFormat == types.RelayFormatOpenAI ||
 			relayFormat == types.RelayFormatOpenAIResponses ||
 			relayFormat == types.RelayFormatOpenAIResponsesCompaction ||
@@ -137,21 +146,20 @@ func isNativeFormatSupported(channelType int, relayFormat types.RelayFormat) boo
 	}
 }
 
-// shouldSkipChannelOnPassthrough checks whether a channel should be excluded from selection
-// when pass-through body mode is active and the channel's type cannot natively handle the
-// given relay format.
-func shouldSkipChannelOnPassthrough(channel *Channel, relayFormat types.RelayFormat) bool {
-	if relayFormat == "" {
-		return false
+// IsPassthroughFormatCompatible reports whether a channel can receive a relay format when body passthrough is active.
+func IsPassthroughFormatCompatible(channelType int, passthroughEnabled bool, relayFormat types.RelayFormat) bool {
+	if relayFormat == "" || !passthroughEnabled {
+		return true
 	}
+	return isNativeFormatSupported(channelType, relayFormat)
+}
+
+func isChannelPassthroughBodyEnabled(channel *Channel) bool {
 	setting := dto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {
 		_ = common.Unmarshal([]byte(*channel.Setting), &setting)
 	}
-	if !setting.PassThroughBodyEnabled {
-		return false
-	}
-	return !isNativeFormatSupported(channel.Type, relayFormat)
+	return model_setting.GetGlobalSettings().PassThroughRequestEnabled || setting.PassThroughBodyEnabled
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, relayFormat ...types.RelayFormat) (*Channel, error) {
@@ -186,7 +194,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, relayForma
 		filtered = make([]int, 0, len(channels))
 		for _, channelId := range channels {
 			if ch, ok := channelsIDM[channelId]; ok {
-				if !shouldSkipChannelOnPassthrough(ch, rf) {
+				if IsPassthroughFormatCompatible(ch.Type, isChannelPassthroughBodyEnabled(ch), rf) {
 					filtered = append(filtered, channelId)
 				}
 			}
