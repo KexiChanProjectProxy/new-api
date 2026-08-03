@@ -48,6 +48,7 @@ export function getChannelTypeIcon(type: number): string {
   const TYPE_TO_ICON: Record<number, string> = {
     // OpenAI family
     1: 'OpenAI', // OpenAI
+    58: 'OpenAI',
     6: 'OpenAI', // OpenAIMax
     7: 'OpenAI', // OhMyGPT
     8: 'OpenAI', // Custom

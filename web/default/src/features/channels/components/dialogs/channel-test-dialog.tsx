@@ -236,7 +236,7 @@ export function ChannelTestDialog({
   })
 
   const resetState = useCallback(() => {
-    setEndpointType('auto')
+    setEndpointType(currentRow?.type === 58 ? 'openai-response' : 'auto')
     setIsStreamTest(false)
     setSearchTerm('')
     setTestResults({})
@@ -245,7 +245,7 @@ export function ChannelTestDialog({
     setIsBatchTesting(false)
     setFailureDetails(null)
     setPagination({ pageIndex: 0, pageSize: 10 })
-  }, [])
+  }, [currentRow?.type])
 
   useEffect(() => {
     if (open && currentRow) {

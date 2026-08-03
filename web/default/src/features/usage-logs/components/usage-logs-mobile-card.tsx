@@ -43,7 +43,7 @@ const logTypeRowTint: Record<number, string> = {
   [LOG_TYPE_ENUM.REFUND]: 'bg-blue-50/30 dark:bg-blue-950/15 border-blue-200/50 dark:border-blue-900/30',
 }
 
-interface UsageLogsMobileListProps<TData> {
+interface UsageLogsMobileListProps<TData extends Record<string, unknown>> {
   table: Table<TData>
   isLoading?: boolean
   emptyTitle?: string
@@ -174,7 +174,7 @@ function MobileLogTimeStatus({
   )
 }
 
-function CommonLogsCard<TData>({
+function CommonLogsCard<TData extends Record<string, unknown>>({
   cells,
 }: {
   cells: Map<string, Cell<TData, unknown>>
@@ -329,7 +329,7 @@ function DrawingLogsCard<TData>({
   )
 }
 
-export function UsageLogsMobileList<TData>({
+export function UsageLogsMobileList<TData extends Record<string, unknown>>({
   table,
   isLoading = false,
   emptyTitle,

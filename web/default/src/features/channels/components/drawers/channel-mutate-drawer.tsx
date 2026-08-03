@@ -410,7 +410,7 @@ export function ChannelMutateDrawer({
   const basicModels = useMemo(() => {
     if (!allModelsList.length) return []
     // Filter models based on common patterns for specific types
-    if (currentType === 1) {
+    if (currentType === 1 || currentType === 58) {
       return allModelsList.filter(
         (model) => model.startsWith('gpt-') || model.startsWith('text-')
       )
@@ -1141,7 +1141,7 @@ export function ChannelMutateDrawer({
                       )}
                     />
 
-                    {currentType === 1 && (
+                    {(currentType === 1 || currentType === 58) && (
                       <FormField
                         control={form.control}
                         name='openai_organization'
@@ -2883,7 +2883,9 @@ export function ChannelMutateDrawer({
                         title={t('Channel Extra Settings')}
                         icon={<Settings className='h-4 w-4' />}
                       />
-                      {(currentType === 1 || currentType === 14) && (
+                      {(currentType === 1 ||
+                        currentType === 58 ||
+                        currentType === 14) && (
                         <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
                           <SubHeading
                             title={t('Field passthrough controls')}
@@ -2914,7 +2916,7 @@ export function ChannelMutateDrawer({
                               )}
                             />
 
-                            {currentType === 1 && (
+                            {(currentType === 1 || currentType === 58) && (
                               <>
                                 <FormField
                                   control={form.control}
