@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -38,6 +39,7 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		relayFormat := inferRelayFormatFromPath(c.Request.URL.Path)
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -51,6 +53,10 @@ func Distribute() func(c *gin.Context) {
 			}
 			if channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+			if !isDirectChannelRelayFormatCompatible(channel, relayFormat) {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorTokenChannelFormatError), types.ErrorCodeInvalidRequest)
 				return
 			}
 		} else {
@@ -109,7 +115,7 @@ func Distribute() func(c *gin.Context) {
 								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorAffinityChannelDisabled))
 								return
 							}
-						} else if usingGroup == "auto" {
+						} else if isDirectChannelRelayFormatCompatible(preferred, relayFormat) && usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
 							for _, g := range autoGroups {
@@ -121,7 +127,7 @@ func Distribute() func(c *gin.Context) {
 									break
 								}
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+						} else if isDirectChannelRelayFormatCompatible(preferred, relayFormat) && model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
 							channel = preferred
 							selectGroup = usingGroup
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
@@ -135,7 +141,7 @@ func Distribute() func(c *gin.Context) {
 						ModelName:   modelRequest.Model,
 						TokenGroup:  usingGroup,
 						Retry:       common.GetPointer(0),
-						RelayFormat: inferRelayFormatFromPath(c.Request.URL.Path),
+						RelayFormat: relayFormat,
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -165,6 +171,15 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func isDirectChannelRelayFormatCompatible(channel *model.Channel, relayFormat types.RelayFormat) bool {
+	if channel == nil {
+		return false
+	}
+	channelSetting := channel.GetSetting()
+	passthroughEnabled := model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelSetting.PassThroughBodyEnabled
+	return model.IsPassthroughFormatCompatible(channel.Type, passthroughEnabled, relayFormat)
 }
 
 // getModelFromRequest 从请求中读取模型信息
