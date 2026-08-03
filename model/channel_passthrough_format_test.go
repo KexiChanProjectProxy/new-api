@@ -101,6 +101,13 @@ func TestPassthroughFormatSelectors(t *testing.T) {
 			wantSelectable:     true,
 		},
 		{
+			name:               "passthrough chat accepts realtime",
+			channelType:        constant.ChannelTypeOpenAI,
+			channelPassThrough: true,
+			relayFormat:        types.RelayFormatOpenAIRealtime,
+			wantSelectable:     true,
+		},
+		{
 			name:               "passthrough chat rejects responses",
 			channelType:        constant.ChannelTypeOpenAI,
 			channelPassThrough: true,
@@ -266,6 +273,13 @@ func TestPassthroughFormatCompatibilityMatrix(t *testing.T) {
 			channelType:    constant.ChannelTypeOpenAI,
 			passthrough:    true,
 			relayFormat:    types.RelayFormatEmbedding,
+			wantCompatible: true,
+		},
+		{
+			name:           "chat passthrough realtime",
+			channelType:    constant.ChannelTypeOpenAI,
+			passthrough:    true,
+			relayFormat:    types.RelayFormatOpenAIRealtime,
 			wantCompatible: true,
 		},
 		{
